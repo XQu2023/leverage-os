@@ -69,8 +69,10 @@ export default function Home() {
   const [data, setData] = useState<State>(initialState);
   const [hydrated, setHydrated] = useState(false);
   const [step, setStep] = useState(1);
+  const [today, setToday] = useState("今天");
 
   useEffect(() => {
+    setToday(new Intl.DateTimeFormat("zh-CN", { month: "long", day: "numeric", weekday: "long" }).format(new Date()));
     try {
       const saved = window.localStorage.getItem(STORAGE_KEY);
       if (saved) setData({ ...initialState, ...JSON.parse(saved) });
@@ -84,7 +86,6 @@ export default function Home() {
   }, [data, hydrated]);
 
   const judgment = useMemo(() => judgeAction(data.goal, data.action), [data.goal, data.action]);
-  const today = new Intl.DateTimeFormat("zh-CN", { month: "long", day: "numeric", weekday: "long" }).format(new Date());
   const progress = Math.round(((step - 1) / 5) * 100);
   const update = (patch: Partial<State>) => setData((current) => ({ ...current, ...patch }));
 
