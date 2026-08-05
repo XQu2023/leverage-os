@@ -46,3 +46,27 @@ test("keeps device-dependent values out of the initial render", async () => {
   assert.match(page, /useEffect\(\(\) => \{[\s\S]*window\.localStorage\.getItem/);
   assert.doesNotMatch(page, /useState\([^\n]*(?:new Date|Date\.now|Math\.random|toLocale)/);
 });
+
+test("implements Leave Behind with selectable AI asset suggestions", async () => {
+  const page = await readFile(new URL("../app/page.tsx", import.meta.url), "utf8");
+
+  assert.match(page, /05 · LEAVE BEHIND/);
+  assert.match(page, /客户跟进 SOP/);
+  assert.match(page, /客户访谈 Prompt/);
+  assert.match(page, /客户案例/);
+  assert.match(page, /客户决策原则/);
+  assert.match(page, /aria-pressed=\{selected\}/);
+  assert.match(page, /保存资产并继续/);
+});
+
+test("implements Daily Review with all three saved prompts", async () => {
+  const page = await readFile(new URL("../app/page.tsx", import.meta.url), "utf8");
+
+  assert.match(page, /Biggest Waste/);
+  assert.match(page, /Best Asset Created/);
+  assert.match(page, /Tomorrow&apos;s One Focus/);
+  assert.match(page, /biggestWaste: data\.biggestWaste/);
+  assert.match(page, /bestAsset: data\.bestAsset/);
+  assert.match(page, /tomorrowFocus: data\.tomorrowFocus/);
+  assert.match(page, /保存并完成/);
+});

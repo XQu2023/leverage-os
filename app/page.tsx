@@ -5,8 +5,9 @@ import { useEffect, useMemo, useState } from "react";
 type Review = {
   date: string;
   action: string;
-  win: string;
-  lesson: string;
+  biggestWaste: string;
+  bestAsset: string;
+  tomorrowFocus: string;
   multiplier: string;
 };
 
@@ -17,8 +18,9 @@ type State = {
   completed: boolean;
   assets: string[];
   selectedAssets: string[];
-  win: string;
-  lesson: string;
+  biggestWaste: string;
+  bestAsset: string;
+  tomorrowFocus: string;
   reviews: Review[];
 };
 
@@ -29,8 +31,9 @@ const initialState: State = {
   completed: false,
   assets: [],
   selectedAssets: [],
-  win: "",
-  lesson: "",
+  biggestWaste: "",
+  bestAsset: "",
+  tomorrowFocus: "",
   reviews: [],
 };
 
@@ -59,10 +62,14 @@ function suggestMultiplier(action: string) {
 }
 
 function suggestAssets(action: string) {
-  if (/客户|销售|联系|访谈|用户/.test(action)) return ["客户洞察记录", "跟进话术模板", "常见异议清单"];
-  if (/内容|发布|文章|视频|写/.test(action)) return ["内容模板", "发布检查清单", "可复用素材库"];
-  if (/产品|开发|功能|上线|测试/.test(action)) return ["产品决策记录", "发布检查清单", "用户反馈模板"];
-  return ["执行检查清单", "可复用工作模板", "关键决策记录"];
+  const context = /客户|销售|联系|访谈|用户/.test(action)
+    ? ["客户跟进 SOP", "客户访谈 Prompt", "客户案例", "客户决策原则"]
+    : /内容|发布|文章|视频|写/.test(action)
+      ? ["内容发布 SOP", "内容生成 Prompt", "内容案例", "选题决策原则"]
+      : /产品|开发|功能|上线|测试/.test(action)
+        ? ["产品发布 SOP", "产品测试 Prompt", "用户案例", "产品决策原则"]
+        : ["执行 SOP", "复用 Prompt", "客户案例", "决策原则"];
+  return context;
 }
 
 export default function Home() {
@@ -73,7 +80,12 @@ export default function Home() {
   useEffect(() => {
     try {
       const saved = window.localStorage.getItem(STORAGE_KEY);
-      if (saved) setData({ ...initialState, ...JSON.parse(saved) });
+      if (saved) {
+        const parsed = JSON.parse(saved) as Partial<State>;
+        const assets = suggestAssets(parsed.action ?? "");
+        const selectedAssets = (parsed.selectedAssets ?? []).filter((asset) => assets.includes(asset));
+        setData({ ...initialState, ...parsed, assets, selectedAssets: selectedAssets.length ? selectedAssets : [assets[0]] });
+      }
     } finally {
       setHydrated(true);
     }
@@ -90,18 +102,22 @@ export default function Home() {
   const progress = Math.round(((step - 1) / 5) * 100);
   const update = (patch: Partial<State>) => setData((current) => ({ ...current, ...patch }));
 
-  function next() {
-    if (step === 2 && !data.multiplier) update({ multiplier: suggestMultiplier(data.action) });
-    if (step === 4 && data.assets.length === 0) {
+  function goToStep(nextStep: number) {
+    if (nextStep === 5 && data.assets.length !== 4) {
       const assets = suggestAssets(data.action);
       update({ assets, selectedAssets: [assets[0]] });
     }
-    setStep((current) => Math.min(6, current + 1));
+    setStep(nextStep);
+  }
+
+  function next() {
+    if (step === 2 && !data.multiplier) update({ multiplier: suggestMultiplier(data.action) });
+    goToStep(Math.min(6, step + 1));
   }
 
   function saveReview() {
-    if (!data.win.trim() || !data.lesson.trim()) return;
-    const review = { date: new Date().toISOString(), action: data.action, win: data.win, lesson: data.lesson, multiplier: data.multiplier };
+    if (!data.biggestWaste.trim() || !data.bestAsset.trim() || !data.tomorrowFocus.trim()) return;
+    const review = { date: new Date().toISOString(), action: data.action, biggestWaste: data.biggestWaste, bestAsset: data.bestAsset, tomorrowFocus: data.tomorrowFocus, multiplier: data.multiplier };
     update({ reviews: [review, ...data.reviews], completed: true });
   }
 
@@ -131,7 +147,7 @@ export default function Home() {
         <div className="content">
           <div className="stepper" aria-label="今日流程">
             {["年度目标", "最高杠杆", "AI 判断", "今日乘数", "留下资产", "日回顾"].map((label, index) => (
-              <button key={label} className={step === index + 1 ? "current" : step > index + 1 ? "done" : ""} onClick={() => step > index + 1 && setStep(index + 1)}>
+              <button key={label} className={step === index + 1 ? "current" : step > index + 1 ? "done" : ""} onClick={() => step > index + 1 && goToStep(index + 1)}>
                 <span>{step > index + 1 ? "✓" : index + 1}</span><small>{label}</small>
               </button>
             ))}
@@ -177,27 +193,29 @@ export default function Home() {
               <h2>完成之后，你要留下什么？</h2>
               <p className="lead">好的工作会消失，除非你把它变成资产。选择今天要保存的成果。</p>
               <div className="asset-grid">
-                {data.assets.map((asset, i) => { const selected = data.selectedAssets.includes(asset); return <button key={asset} className={selected ? "asset selected" : "asset"} onClick={() => update({ selectedAssets: selected ? data.selectedAssets.filter((x) => x !== asset) : [...data.selectedAssets, asset] })}><span>{["▤", "◇", "◎"][i]}</span><div><strong>{asset}</strong><small>{selected ? "已加入今日成果" : "点击选择"}</small></div><i>{selected ? "✓" : "+"}</i></button>; })}
+                {data.assets.map((asset, i) => { const selected = data.selectedAssets.includes(asset); return <button key={asset} aria-pressed={selected} className={selected ? "asset selected" : "asset"} onClick={() => update({ selectedAssets: selected ? data.selectedAssets.filter((x) => x !== asset) : [...data.selectedAssets, asset] })}><span>{["▤", "◇", "◎", "◆"][i]}</span><div><strong>{asset}</strong><small>{selected ? "已选择 · 将保存为今日资产" : "AI 建议 · 点击选择"}</small></div><i>{selected ? "✓" : "+"}</i></button>; })}
               </div>
+              <p className="selection-status">已选择 {data.selectedAssets.length} 项资产</p>
               <div className="multiplier-note"><span>今日乘数</span>{data.multiplier}</div>
             </>}
 
             {step === 6 && <>
               <p className="kicker">06 · DAILY REVIEW</p>
-              <h2>{data.completed ? "今天的复利已经开始。" : "用两句话，结束今天。"}</h2>
+              <h2>{data.completed ? "今天的复利已经开始。" : "用三个答案，结束今天。"}</h2>
               {data.completed ? <div className="completion">
                 <div className="completion-mark">✓</div><h3>Daily review saved</h3><p>你完成了今天的最高杠杆行动，并留下 {data.selectedAssets.length} 项可复用资产。</p>
                 <div className="summary-row"><span>行动</span><strong>{data.action}</strong></div><div className="summary-row"><span>乘数</span><strong>{data.multiplier}</strong></div>
-                <button className="secondary" onClick={() => { update({ action: "", multiplier: "", completed: false, assets: [], selectedAssets: [], win: "", lesson: "" }); setStep(2); }}>开始新的一天 →</button>
+                <button className="secondary" onClick={() => { update({ action: "", multiplier: "", completed: false, assets: [], selectedAssets: [], biggestWaste: "", bestAsset: "", tomorrowFocus: "" }); setStep(2); }}>开始新的一天 →</button>
               </div> : <div className="review-form">
-                <label>今天真正推进了什么？<textarea value={data.win} onChange={(e) => update({ win: e.target.value })} placeholder="记录结果，而不是投入的时间…" /></label>
-                <label>明天需要记住什么？<textarea value={data.lesson} onChange={(e) => update({ lesson: e.target.value })} placeholder="一个判断、教训或下一步…" /></label>
+                <label><span>Biggest Waste</span><strong>今天最大的浪费是什么？</strong><textarea value={data.biggestWaste} onChange={(e) => update({ biggestWaste: e.target.value })} placeholder="以后可以删除、委派或自动化什么？" /></label>
+                <label><span>Best Asset Created</span><strong>今天留下的最佳资产是什么？</strong><textarea value={data.bestAsset} onChange={(e) => update({ bestAsset: e.target.value })} placeholder="SOP、Prompt、案例或决策原则…" /></label>
+                <label><span>Tomorrow&apos;s One Focus</span><strong>明天唯一的重点是什么？</strong><textarea value={data.tomorrowFocus} onChange={(e) => update({ tomorrowFocus: e.target.value })} placeholder="只写一个最值得推进的结果…" /></label>
               </div>}
             </>}
 
             {!data.completed && <div className="actions">
               {step > 1 && <button className="back" onClick={() => setStep(step - 1)}>← 返回</button>}
-              <button className="primary" disabled={!canContinue || (step === 6 && (!data.win.trim() || !data.lesson.trim()))} onClick={step === 6 ? saveReview : next}>{step === 6 ? "完成今日回顾" : step === 3 ? "接受判断，继续" : "继续"}<span>→</span></button>
+              <button className="primary" disabled={!canContinue || (step === 5 && data.selectedAssets.length === 0) || (step === 6 && (!data.biggestWaste.trim() || !data.bestAsset.trim() || !data.tomorrowFocus.trim()))} onClick={step === 6 ? saveReview : next}>{step === 6 ? "保存并完成" : step === 5 ? "保存资产并继续" : step === 3 ? "接受判断，继续" : "继续"}<span>→</span></button>
             </div>}
           </div>
         </div>
