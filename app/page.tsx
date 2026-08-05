@@ -69,10 +69,8 @@ export default function Home() {
   const [data, setData] = useState<State>(initialState);
   const [hydrated, setHydrated] = useState(false);
   const [step, setStep] = useState(1);
-  const [today, setToday] = useState("今天");
 
   useEffect(() => {
-    setToday(new Intl.DateTimeFormat("zh-CN", { month: "long", day: "numeric", weekday: "long" }).format(new Date()));
     try {
       const saved = window.localStorage.getItem(STORAGE_KEY);
       if (saved) setData({ ...initialState, ...JSON.parse(saved) });
@@ -86,6 +84,9 @@ export default function Home() {
   }, [data, hydrated]);
 
   const judgment = useMemo(() => judgeAction(data.goal, data.action), [data.goal, data.action]);
+  const today = hydrated
+    ? new Intl.DateTimeFormat("zh-CN", { month: "long", day: "numeric", weekday: "long" }).format(new Date())
+    : "今天";
   const progress = Math.round(((step - 1) / 5) * 100);
   const update = (patch: Partial<State>) => setData((current) => ({ ...current, ...patch }));
 
@@ -146,7 +147,7 @@ export default function Home() {
             </>}
 
             {step === 2 && <>
-              <p className="kicker">02 · TODAY'S HIGHEST LEVERAGE ACTION</p>
+              <p className="kicker">02 · TODAY&apos;S HIGHEST LEVERAGE ACTION</p>
               <h2>今天哪一个行动，最能推动这个目标？</h2>
               <div className="goal-context"><span>一年目标</span><p>{data.goal}</p></div>
               <textarea className="hero-input" value={data.action} onChange={(e) => update({ action: e.target.value })} placeholder="写下一个今天可以完成、会产生真实结果的行动…" autoFocus />
@@ -164,7 +165,7 @@ export default function Home() {
             </>}
 
             {step === 4 && <>
-              <p className="kicker">04 · TODAY'S MULTIPLIER</p>
+              <p className="kicker">04 · TODAY&apos;S MULTIPLIER</p>
               <h2>怎样让今天的成果不只发生一次？</h2>
               <p className="lead">AI 根据你的行动找到一个最简单的放大方式。你可以直接修改。</p>
               <div className="ai-proposal"><span className="spark">✦</span><div><small>AI 建议的乘数</small><textarea value={data.multiplier} onChange={(e) => update({ multiplier: e.target.value })} /></div></div>
