@@ -11,6 +11,8 @@ type Review = {
   multiplier: string;
 };
 
+type View = "today" | "assets" | "reviews";
+
 type State = {
   goal: string;
   action: string;
@@ -76,6 +78,9 @@ export default function Home() {
   const [data, setData] = useState<State>(initialState);
   const [hydrated, setHydrated] = useState(false);
   const [step, setStep] = useState(1);
+  const [view, setView] = useState<View>("today");
+  const [selectedAsset, setSelectedAsset] = useState<string | null>(null);
+  const [selectedReview, setSelectedReview] = useState<number | null>(null);
 
   useEffect(() => {
     try {
@@ -122,18 +127,33 @@ export default function Home() {
   }
 
   const canContinue = step === 1 ? data.goal.trim().length > 8 : step === 2 ? data.action.trim().length > 5 : true;
+  const openToday = () => {
+    setView("today");
+    setSelectedAsset(null);
+    setSelectedReview(null);
+  };
+
+  function openAssets() {
+    setView("assets");
+    setSelectedAsset(null);
+  }
+
+  function openReviews() {
+    setView("reviews");
+    setSelectedReview(null);
+  }
 
   return (
     <main className="app-shell">
       <aside className="sidebar">
         <div className="brand"><span className="brand-mark">L</span><span>Leverage OS</span></div>
         <nav aria-label="主要导航">
-          <button className="nav-item active"><span>◆</span> Today</button>
-          <button className="nav-item" onClick={() => setStep(1)}><span>↗</span> One-Year Goal</button>
+          <button className={`nav-item ${view === "today" ? "active" : ""}`} onClick={openToday}><span>◆</span> Today</button>
+          <button className="nav-item" onClick={() => { openToday(); setStep(1); }}><span>↗</span> One-Year Goal</button>
           <div className="nav-spacer" />
           <p className="nav-label">YOUR SYSTEM</p>
-          <div className="system-stat"><span>留下的资产</span><strong>{data.selectedAssets.length}</strong></div>
-          <div className="system-stat"><span>完成的日回顾</span><strong>{data.reviews.length}</strong></div>
+          <button className={`system-stat ${view === "assets" ? "active" : ""}`} onClick={openAssets} aria-label={`查看留下的资产，共 ${data.selectedAssets.length} 项`}><span>留下的资产</span><strong>{data.selectedAssets.length}</strong></button>
+          <button className={`system-stat ${view === "reviews" ? "active" : ""}`} onClick={openReviews} aria-label={`查看完成的日回顾，共 ${data.reviews.length} 项`}><span>完成的日回顾</span><strong>{data.reviews.length}</strong></button>
         </nav>
         <div className="sidebar-foot"><div className="avatar">YO</div><div><strong>Your OS</strong><small>本地私人空间</small></div></div>
       </aside>
@@ -145,6 +165,18 @@ export default function Home() {
         </header>
 
         <div className="content">
+          {view === "assets" && <LibraryView title="留下的资产" kicker="ASSET LIBRARY" empty="完成今日流程后，保存的 SOP、Prompt、案例与决策原则会出现在这里。" onBack={openToday}>
+            {selectedAsset ? <DetailCard label="SAVED ASSET" title={selectedAsset} onBack={() => setSelectedAsset(null)}>
+              <p>这是你在今日工作中选择保留的可复用资产。它保存在当前设备的私人空间中。</p>
+              {data.action && <><span className="detail-label">来源行动</span><p>{data.action}</p></>}
+            </DetailCard> : data.selectedAssets.map((asset, index) => <button className="library-row" key={`${asset}-${index}`} onClick={() => setSelectedAsset(asset)}><span><small>ASSET {String(index + 1).padStart(2, "0")}</small><strong>{asset}</strong></span><i>→</i></button>)}
+          </LibraryView>}
+
+          {view === "reviews" && <LibraryView title="完成的日回顾" kicker="REVIEW LIBRARY" empty="完成一次日回顾后，它会按时间保存在这里。" onBack={openToday}>
+            {selectedReview !== null && data.reviews[selectedReview] ? <ReviewDetail review={data.reviews[selectedReview]} onBack={() => setSelectedReview(null)} /> : data.reviews.map((review, index) => <button className="library-row" key={`${review.date}-${index}`} onClick={() => setSelectedReview(index)}><span><small>{formatReviewDate(review.date)}</small><strong>{review.action || "今日回顾"}</strong></span><i>→</i></button>)}
+          </LibraryView>}
+
+          {view === "today" && <>
           <div className="stepper" aria-label="今日流程">
             {["年度目标", "最高杠杆", "AI 判断", "今日乘数", "留下资产", "日回顾"].map((label, index) => (
               <button key={label} className={step === index + 1 ? "current" : step > index + 1 ? "done" : ""} onClick={() => step > index + 1 && goToStep(index + 1)}>
@@ -218,8 +250,39 @@ export default function Home() {
               <button className="primary" disabled={!canContinue || (step === 5 && data.selectedAssets.length === 0) || (step === 6 && (!data.biggestWaste.trim() || !data.bestAsset.trim() || !data.tomorrowFocus.trim()))} onClick={step === 6 ? saveReview : next}>{step === 6 ? "保存并完成" : step === 5 ? "保存资产并继续" : step === 3 ? "接受判断，继续" : "继续"}<span>→</span></button>
             </div>}
           </div>
+          </>}
         </div>
       </section>
     </main>
   );
+}
+
+function formatReviewDate(date: string) {
+  const parsed = new Date(date);
+  return Number.isNaN(parsed.getTime()) ? date : parsed.toISOString().slice(0, 10);
+}
+
+function LibraryView({ title, kicker, empty, onBack, children }: { title: string; kicker: string; empty: string; onBack: () => void; children: React.ReactNode }) {
+  const hasItems = Array.isArray(children) ? children.length > 0 : Boolean(children);
+  return <section className="library" aria-labelledby="library-title">
+    <button className="library-back" onClick={onBack}>← 返回 Today</button>
+    <p className="kicker">{kicker}</p>
+    <h2 id="library-title">{title}</h2>
+    <div className="library-list">{hasItems ? children : <div className="empty-state"><span>◇</span><p>{empty}</p></div>}</div>
+  </section>;
+}
+
+function DetailCard({ label, title, onBack, children }: { label: string; title: string; onBack: () => void; children: React.ReactNode }) {
+  return <article className="detail-card">
+    <button className="detail-back" onClick={onBack}>← 返回列表</button>
+    <small>{label}</small><h3>{title}</h3>{children}
+  </article>;
+}
+
+function ReviewDetail({ review, onBack }: { review: Review; onBack: () => void }) {
+  return <DetailCard label={formatReviewDate(review.date)} title={review.action || "今日回顾"} onBack={onBack}>
+    <span className="detail-label">Biggest Waste</span><p>{review.biggestWaste || "—"}</p>
+    <span className="detail-label">Best Asset Created</span><p>{review.bestAsset || "—"}</p>
+    <span className="detail-label">Tomorrow&apos;s One Focus</span><p>{review.tomorrowFocus || "—"}</p>
+  </DetailCard>;
 }

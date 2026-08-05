@@ -70,3 +70,21 @@ test("implements Daily Review with all three saved prompts", async () => {
   assert.match(page, /tomorrowFocus: data\.tomorrowFocus/);
   assert.match(page, /保存并完成/);
 });
+
+test("links sidebar summaries to accessible asset and review libraries", async () => {
+  const [page, css] = await Promise.all([
+    readFile(new URL("../app/page.tsx", import.meta.url), "utf8"),
+    readFile(new URL("../app/globals.css", import.meta.url), "utf8"),
+  ]);
+
+  assert.match(page, /onClick=\{openAssets\}/);
+  assert.match(page, /onClick=\{openReviews\}/);
+  assert.match(page, /查看留下的资产，共/);
+  assert.match(page, /查看完成的日回顾，共/);
+  assert.match(page, /ASSET LIBRARY/);
+  assert.match(page, /REVIEW LIBRARY/);
+  assert.match(page, /function ReviewDetail/);
+  assert.match(css, /\.system-stat:hover/);
+  assert.match(css, /\.system-stat:focus-visible/);
+  assert.match(css, /\.library-row:focus-visible/);
+});
