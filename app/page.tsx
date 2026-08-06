@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
-import { BRAIN_OPTIONS, ContextBuilder, createBrain, type BrainOutput, type BrainProviderId, type BrainTrace } from "@/lib/brain";
+import { BRAIN_OPTIONS, ContextBuilder, createBrain, type BrainMode, type BrainOutput, type BrainProviderId, type BrainTrace } from "@/lib/brain";
 import { generateAssetDrafts, type AssetDraft } from "@/lib/asset-drafts";
 import { explainIncompleteDecision, generateWeeklyDecisionReport, type DecisionChoice, type DecisionHistoryEntry, type WeeklyDecisionReport } from "@/lib/decision-memory";
 import { LATEST_STORAGE_VERSION, STORAGE_KEY, loadStoredState } from "@/lib/storage";
@@ -18,6 +18,9 @@ type Review = {
 type View = "today" | "assets" | "reviews" | "weekly";
 type AiChoice = DecisionChoice | null;
 const contextBuilder = new ContextBuilder();
+
+type BrainUsage = { totalCalls: number; inputTokens: number; outputTokens: number; totalTokens: number; estimatedCostUsd: number; fallbackCount: number };
+const emptyBrainUsage: BrainUsage = { totalCalls: 0, inputTokens: 0, outputTokens: 0, totalTokens: 0, estimatedCostUsd: 0, fallbackCount: 0 };
 
 type State = {
   storageVersion: typeof LATEST_STORAGE_VERSION;
@@ -36,7 +39,8 @@ type State = {
   activeDecisionId: string | null;
   assetDrafts: AssetDraft[];
   completionResult: "completed" | "partial" | "failed" | null;
-  brainProvider: BrainProviderId;
+  brainProvider: BrainMode;
+  brainUsage: BrainUsage;
 };
 
 const initialState: State = {
@@ -56,7 +60,8 @@ const initialState: State = {
   activeDecisionId: null,
   assetDrafts: [],
   completionResult: null,
-  brainProvider: "openai",
+  brainProvider: "auto",
+  brainUsage: emptyBrainUsage,
 };
 
 function suggestMultiplier(action: string) {
@@ -88,6 +93,10 @@ export default function Home() {
   const [editingDraftId, setEditingDraftId] = useState<string | null>(null);
   const [brainEvaluation, setBrainEvaluation] = useState<{ key: string; output: BrainOutput } | null>(null);
   const [brainTrace, setBrainTrace] = useState<{ key: string; trace: BrainTrace } | null>(null);
+  const [brainComparison, setBrainComparison] = useState<{ key: string; rules: BrainTrace; openai: BrainTrace } | null>(null);
+  const [compareMode, setCompareMode] = useState(false);
+  const [debugOpen, setDebugOpen] = useState(false);
+  const [lastUpdated, setLastUpdated] = useState<string | null>(null);
 
   useEffect(() => {
     try {
@@ -104,31 +113,38 @@ export default function Home() {
     if (hydrated) window.localStorage.setItem(STORAGE_KEY, JSON.stringify(data));
   }, [data, hydrated]);
 
-  const brain = useMemo(() => createBrain(data.brainProvider), [data.brainProvider]);
+  const activeProvider: BrainProviderId = data.brainProvider === "auto" ? "openai" : data.brainProvider;
+  const brain = useMemo(() => createBrain(activeProvider), [activeProvider]);
   const brainContext = useMemo(() => contextBuilder.build({
     yearlyGoal: data.goal,
     todayAction: data.action,
     decisionHistory: data.decisionHistory,
     assets: data.assetDrafts.filter((draft) => draft.status === "saved"),
     reviews: data.reviews,
-    selectedProvider: data.brainProvider,
-  }), [data.goal, data.action, data.decisionHistory, data.assetDrafts, data.reviews, data.brainProvider]);
+    selectedProvider: activeProvider,
+  }), [data.goal, data.action, data.decisionHistory, data.assetDrafts, data.reviews, activeProvider]);
   const brainInput = useMemo(() => ({ task: "decision" as const, context: brainContext }), [brainContext]);
   const evaluationKey = JSON.stringify(brainInput);
   useEffect(() => {
+    if (step !== 3) return;
     let active = true;
-    brain.evaluate(brainInput).then((output) => {
-      if (active) setBrainEvaluation({ key: evaluationKey, output });
+    const run = compareMode
+      ? Promise.all([createBrain("rules").inspect(brainInput), createBrain("openai").inspect(brainInput)])
+          .then(([rules, openai]) => ({ primary: activeProvider === "rules" ? rules : openai, traces: [rules, openai], comparison: { key: evaluationKey, rules, openai } }))
+      : brain.inspect(brainInput).then((trace) => ({ primary: trace, traces: [trace], comparison: null }));
+    run.then(({ primary, traces, comparison }) => {
+      if (!active) return;
+      setBrainEvaluation({ key: evaluationKey, output: primary.parsedOutput });
+      setBrainTrace({ key: evaluationKey, trace: primary });
+      setBrainComparison(comparison);
+      setLastUpdated(new Date().toISOString());
+      setData((current) => ({ ...current, brainUsage: addBrainUsage(current.brainUsage, traces.map((trace) => trace.parsedOutput)) }));
     });
-    if (process.env.NODE_ENV !== "production") {
-      brain.inspect(brainInput).then((trace) => {
-        if (active) setBrainTrace({ key: evaluationKey, trace });
-      });
-    }
     return () => { active = false; };
-  }, [brain, brainInput, evaluationKey]);
+  }, [activeProvider, brain, brainInput, compareMode, evaluationKey, step]);
   const judgment = brainEvaluation?.key === evaluationKey ? brainEvaluation.output : null;
   const developerTrace = brainTrace?.key === evaluationKey ? brainTrace.trace : null;
+  const comparison = brainComparison?.key === evaluationKey ? brainComparison : null;
   const weeklyReport = useMemo(() => generateWeeklyDecisionReport(data.decisionHistory), [data.decisionHistory]);
   const today = hydrated
     ? new Intl.DateTimeFormat("zh-CN", { month: "long", day: "numeric", weekday: "long" }).format(new Date())
@@ -296,14 +312,17 @@ export default function Home() {
               <p className="kicker">03 · AI JUDGMENT</p>
               <h2>这个行动值得你投入今天吗？</h2>
               <BrainSelector value={data.brainProvider} onChange={(brainProvider) => update({ brainProvider })} />
+              <div className="brain-tools"><button type="button" className={compareMode ? "active" : ""} onClick={() => setCompareMode((value) => !value)}>Compare {compareMode ? "On" : "Off"}</button><button type="button" className={debugOpen ? "active" : ""} onClick={() => setDebugOpen((value) => !value)}>Debug</button></div>
               {judgment ? <>
+              <BrainStatus output={judgment} lastUpdated={lastUpdated} mode={data.brainProvider} />
               <div className="judgment-card">
                 <div className="score-ring" style={{ "--score": `${judgment.score * 3.6}deg` } as React.CSSProperties}><span>{judgment.score}</span><small>/ 100</small></div>
                 <div><span className="verdict">{judgment.verdict}</span><h3>{data.action}</h3><p>{judgment.whyToday}</p></div>
               </div>
               <div className="criteria"><div><span>!</span><p><strong>最大风险</strong><br />{judgment.biggestRisk}</p></div><div><span>↑</span><p><strong>更高杠杆选择</strong><br />{judgment.higherLeverageAlternative ?? "当前计划已经足够直接，建议保持。"}</p></div><div><span>✓</span><p><strong>今日交付物</strong><br />{judgment.todayDeliverable}</p></div></div>
               <details className="decision-reasoning"><summary>Why?</summary><div><strong>评分依据</strong><ul>{judgment.reasoning.score.map((reason) => <li key={reason}>{reason}</li>)}</ul><strong>风险依据</strong><p>{judgment.reasoning.risk}</p><strong>建议依据</strong><p>{judgment.reasoning.recommendation}</p></div></details>
-              {process.env.NODE_ENV !== "production" && developerTrace && <PromptPlayground trace={developerTrace} />}
+              {compareMode && comparison && <ComparisonView rules={comparison.rules.parsedOutput} openai={comparison.openai.parsedOutput} />}
+              {debugOpen && developerTrace && <BrainInspector trace={developerTrace} usage={data.brainUsage} />}
               </> : <div className="judgment-card brain-loading"><span className="verdict">Evaluating</span><p>Brain 正在生成判断…</p></div>}
             </>}
 
@@ -366,16 +385,50 @@ function completionLabel(status: State["completionResult"]) {
   return "Pending";
 }
 
-function BrainSelector({ value, onChange }: { value: BrainProviderId; onChange: (provider: BrainProviderId) => void }) {
+function BrainSelector({ value, onChange }: { value: BrainMode; onChange: (provider: BrainMode) => void }) {
   return <div className="brain-selector" aria-label="Brain provider">{BRAIN_OPTIONS.map((option) => <button key={option.id} type="button" className={value === option.id ? "active" : ""} aria-pressed={value === option.id} onClick={() => onChange(option.id)}>{option.label}</button>)}</div>;
 }
 
-function PromptPlayground({ trace }: { trace: BrainTrace }) {
-  return <details className="prompt-playground"><summary>Prompt Playground</summary><div><PlaygroundValue label="Generated Context" value={trace.context} /><PlaygroundValue label="Generated Prompt" value={trace.prompt} /><PlaygroundValue label="Raw Provider Response" value={trace.rawResponse} /><PlaygroundValue label="Parsed Output" value={trace.parsedOutput} /></div></details>;
+function BrainStatus({ output, lastUpdated, mode }: { output: BrainOutput; lastUpdated: string | null; mode: BrainMode }) {
+  const meta = output.metadata;
+  return <section className="brain-status" aria-label="Brain Status"><div><small>BRAIN STATUS</small><strong>{mode === "auto" ? "Auto · " : ""}{providerLabel(meta.provider)}</strong></div><dl><div><dt>Model</dt><dd>{meta.model}</dd></div><div><dt>Latency</dt><dd>{meta.latencyMs} ms</dd></div><div><dt>Fallback</dt><dd className={meta.fallback ? "fallback" : "healthy"}>{meta.fallback ? "Yes" : "No"}</dd></div><div><dt>Updated</dt><dd>{lastUpdated ? new Date(lastUpdated).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" }) : "—"}</dd></div></dl></section>;
+}
+
+function ComparisonView({ rules, openai }: { rules: BrainOutput; openai: BrainOutput }) {
+  return <section className="brain-comparison"><div className="comparison-heading"><small>COMPARE MODE</small><strong>Rules vs OpenAI</strong></div><div className="comparison-grid"><ComparisonCard label="Rules" output={rules} /><ComparisonCard label={openai.metadata.fallback ? "OpenAI → Rules fallback" : "OpenAI"} output={openai} /></div></section>;
+}
+
+function ComparisonCard({ label, output }: { label: string; output: BrainOutput }) {
+  return <article><span>{label}</span><strong>{output.score} · {output.outcome}</strong><p>{output.recommendation}</p><small>{output.todayDeliverable}</small></article>;
+}
+
+function BrainInspector({ trace, usage }: { trace: BrainTrace; usage: BrainUsage }) {
+  return <details className="prompt-playground" open><summary>Brain Inspector</summary><div><section className="usage-monitor"><strong>Usage Monitor</strong><dl><div><dt>Total calls</dt><dd>{usage.totalCalls}</dd></div><div><dt>Tokens</dt><dd>{usage.totalTokens.toLocaleString()}</dd></div><div><dt>Estimated cost</dt><dd>${usage.estimatedCostUsd.toFixed(4)}</dd></div><div><dt>Fallbacks</dt><dd>{usage.fallbackCount}</dd></div></dl></section><PlaygroundValue label="Context" value={trace.context} /><PlaygroundValue label="Prompt" value={trace.prompt} /><PlaygroundValue label="Raw Response" value={trace.rawResponse} /><PlaygroundValue label="Parsed Output" value={trace.parsedOutput} /><PlaygroundValue label="Validation" value={trace.validation} /></div></details>;
 }
 
 function PlaygroundValue({ label, value }: { label: string; value: unknown }) {
   return <section><strong>{label}</strong><pre>{typeof value === "string" ? value : JSON.stringify(value, null, 2)}</pre></section>;
+}
+
+function addBrainUsage(current: BrainUsage | undefined, outputs: BrainOutput[]): BrainUsage {
+  return outputs.reduce((usage, output) => {
+    const tokens = output.metadata.tokenUsage;
+    return {
+      totalCalls: usage.totalCalls + 1,
+      inputTokens: usage.inputTokens + (tokens?.inputTokens ?? 0),
+      outputTokens: usage.outputTokens + (tokens?.outputTokens ?? 0),
+      totalTokens: usage.totalTokens + (tokens?.totalTokens ?? 0),
+      estimatedCostUsd: Number((usage.estimatedCostUsd + output.metadata.estimatedCostUsd).toFixed(6)),
+      fallbackCount: usage.fallbackCount + (output.metadata.fallback ? 1 : 0),
+    };
+  }, current ?? emptyBrainUsage);
+}
+
+function providerLabel(provider: BrainProviderId) {
+  if (provider === "openai") return "OpenAI";
+  if (provider === "claude") return "Claude (mock)";
+  if (provider === "gemini") return "Gemini (mock)";
+  return "Rules";
 }
 
 function LibraryView({ title, kicker, empty, onBack, children }: { title: string; kicker: string; empty: string; onBack: () => void; children: React.ReactNode }) {

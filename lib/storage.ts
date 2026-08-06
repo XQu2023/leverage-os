@@ -1,4 +1,4 @@
-export const LATEST_STORAGE_VERSION = 5 as const;
+export const LATEST_STORAGE_VERSION = 6 as const;
 export const STORAGE_KEY = "leverage-os-v1";
 export const STORAGE_BACKUP_PREFIX = `${STORAGE_KEY}-backup-`;
 
@@ -6,7 +6,7 @@ type StoredRecord = Record<string, unknown> & { storageVersion: number };
 
 export type StorageLike = Pick<Storage, "getItem" | "setItem">;
 
-export function migrateStoredState(value: unknown): StoredRecord & { storageVersion: 5 } {
+export function migrateStoredState(value: unknown): StoredRecord & { storageVersion: 6 } {
   if (!isRecord(value)) throw new Error("Stored state must be an object");
   let state: Record<string, unknown> = { ...value };
   let version = readVersion(state.storageVersion);
@@ -69,13 +69,24 @@ export function migrateStoredState(value: unknown): StoredRecord & { storageVers
     version = 5;
   }
 
+  if (version === 5) {
+    state = {
+      ...state,
+      brainProvider: state.brainProvider === "openai" ? "auto" : normalizeBrainProvider(state.brainProvider),
+      brainUsage: normalizeBrainUsage(state.brainUsage),
+      storageVersion: 6,
+    };
+    version = 6;
+  }
+
   if (version !== LATEST_STORAGE_VERSION) throw new Error(`Migration stopped at version ${version}`);
   if (!Array.isArray(state.decisionHistory) || !Array.isArray(state.assetDrafts)) throw new Error("Migrated collections are invalid");
   state.brainProvider = normalizeBrainProvider(state.brainProvider);
-  return state as StoredRecord & { storageVersion: 5 };
+  state.brainUsage = normalizeBrainUsage(state.brainUsage);
+  return state as StoredRecord & { storageVersion: 6 };
 }
 
-export function loadStoredState<T extends { storageVersion: 5 }>(
+export function loadStoredState<T extends { storageVersion: 6 }>(
   storage: StorageLike,
   initialState: T,
   now = Date.now(),
@@ -139,8 +150,22 @@ function normalizeCompletionResult(value: unknown, completed: unknown) {
 }
 
 function normalizeBrainProvider(value: unknown) {
-  return value === "openai" || value === "claude" || value === "gemini" ? value : "rules";
+  return value === "auto" || value === "openai" || value === "claude" || value === "gemini" ? value : "rules";
 }
+
+function normalizeBrainUsage(value: unknown) {
+  if (!isRecord(value)) return { totalCalls: 0, inputTokens: 0, outputTokens: 0, totalTokens: 0, estimatedCostUsd: 0, fallbackCount: 0 };
+  return {
+    totalCalls: nonNegativeNumber(value.totalCalls),
+    inputTokens: nonNegativeNumber(value.inputTokens),
+    outputTokens: nonNegativeNumber(value.outputTokens),
+    totalTokens: nonNegativeNumber(value.totalTokens),
+    estimatedCostUsd: nonNegativeNumber(value.estimatedCostUsd),
+    fallbackCount: nonNegativeNumber(value.fallbackCount),
+  };
+}
+
+function nonNegativeNumber(value: unknown) { return typeof value === "number" && Number.isFinite(value) && value >= 0 ? value : 0; }
 
 function readVersion(value: unknown): number {
   if (value === undefined) return 0;

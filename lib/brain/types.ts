@@ -34,11 +34,13 @@ export type BrainStructuredOutput = {
 
 export type BrainMetadata = {
   provider: BrainProviderId;
+  model: string;
   latencyMs: number;
   tokenUsage: { inputTokens: number; outputTokens: number; totalTokens: number } | null;
   fallback: boolean;
   attempts: number;
   promptVersion: string;
+  estimatedCostUsd: number;
 };
 
 export type BrainOutput = BrainStructuredOutput & { metadata: BrainMetadata };
@@ -53,6 +55,16 @@ export type BrainTrace = {
   prompt: string;
   rawResponse: string;
   parsedOutput: BrainOutput;
+  validation: BrainValidation;
 };
 
 export type BrainProviderId = "rules" | "openai" | "claude" | "gemini";
+export type BrainMode = "auto" | BrainProviderId;
+
+export type BrainValidation = {
+  status: "passed" | "fallback";
+  schema: boolean;
+  reasoning: boolean;
+  deliverable: boolean;
+  message: string;
+};

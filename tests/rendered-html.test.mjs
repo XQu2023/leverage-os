@@ -105,7 +105,7 @@ test("generates deterministic decision guidance behind a replaceable interface",
 test("keeps the two decision paths and local choice in the page state", async () => {
   const page = await readFile(new URL("../app/page.tsx", import.meta.url), "utf8");
 
-  assert.match(page, /brain\.evaluate\(brainInput\)/);
+  assert.match(page, /brain\.inspect\(brainInput\)/);
   assert.doesNotMatch(page, /decisionEngine/);
   assert.match(page, /Follow AI/);
   assert.match(page, /Keep My Plan/);
@@ -115,7 +115,7 @@ test("keeps the two decision paths and local choice in the page state", async ()
 });
 
 test("evaluates every provider through the same Brain interface", async () => {
-  assert.deepEqual(BRAIN_OPTIONS.map((option) => option.label), ["Rules", "OpenAI", "Claude", "Gemini"]);
+  assert.deepEqual(BRAIN_OPTIONS.map((option) => option.label), ["Auto", "Rules", "OpenAI", "Claude (mock)", "Gemini (mock)"]);
   for (const option of BRAIN_OPTIONS) {
     const brain = option.id === "openai"
       ? new OpenAIBrainProvider(async () => Response.json(makeApiEvaluation("openai")), "https://example.test/brain")
@@ -198,6 +198,8 @@ test("retries OpenAI once, validates the result, and records usage metadata", as
   assert.equal(result.output.metadata.provider, "openai");
   assert.equal(result.output.metadata.fallback, false);
   assert.equal(result.output.metadata.attempts, 2);
+  assert.equal(result.validation.status, "passed");
+  assert.equal(result.validation.deliverable, true);
   assert.deepEqual(result.output.metadata.tokenUsage, { inputTokens: 20, outputTokens: 10, totalTokens: 30 });
 });
 
@@ -214,6 +216,8 @@ test("falls back to rules after two invalid OpenAI evaluations", async () => {
   assert.equal(result.output.metadata.provider, "rules");
   assert.equal(result.output.metadata.fallback, true);
   assert.equal(result.output.metadata.attempts, 2);
+  assert.equal(result.validation.status, "fallback");
+  assert.equal(result.validation.schema, false);
   assert.deepEqual(result.output.metadata.tokenUsage, { inputTokens: 4, outputTokens: 2, totalTokens: 6 });
 });
 
@@ -227,18 +231,43 @@ test("falls back without a network request when no API key is configured", async
   assert.equal(result.output.metadata.provider, "rules");
   assert.equal(result.output.metadata.fallback, true);
   assert.equal(result.output.metadata.attempts, 0);
+  assert.match(result.validation.message, /OPENAI_API_KEY/);
 });
 
-test("includes a development-only Prompt Playground trace without production markup", async () => {
+test("keeps Brain Inspector behind an explicit debug toggle without initial production markup", async () => {
   const page = await readFile(new URL("../app/page.tsx", import.meta.url), "utf8");
   const response = await render();
   const html = await response.text();
-  assert.match(page, /process\.env\.NODE_ENV !== "production"/);
-  assert.match(page, /Generated Context/);
-  assert.match(page, /Generated Prompt/);
-  assert.match(page, /Raw Provider Response/);
+  assert.match(page, /debugOpen && developerTrace/);
+  assert.match(page, /Brain Inspector/);
+  assert.match(page, /Context/);
+  assert.match(page, /Prompt/);
+  assert.match(page, /Raw Response/);
   assert.match(page, /Parsed Output/);
-  assert.doesNotMatch(html, /Prompt Playground/);
+  assert.match(page, /Validation/);
+  assert.doesNotMatch(html, /Brain Inspector/);
+});
+
+test("adds status, persisted provider modes, comparison, trace, and usage monitoring", async () => {
+  const page = await readFile(new URL("../app/page.tsx", import.meta.url), "utf8");
+  assert.match(page, /BRAIN STATUS/);
+  assert.match(page, /Model/);
+  assert.match(page, /Latency/);
+  assert.match(page, /Fallback/);
+  assert.match(page, /Updated/);
+  assert.match(page, /brainProvider: "auto"/);
+  assert.match(page, /Promise\.all\(\[createBrain\("rules"\)\.inspect\(brainInput\), createBrain\("openai"\)\.inspect\(brainInput\)\]\)/);
+  assert.match(page, /Rules vs OpenAI/);
+  assert.match(page, /Total calls/);
+  assert.match(page, /Estimated cost/);
+  assert.match(page, /fallbackCount/);
+});
+
+test("migrates V2.2 storage to Auto mode and initializes usage totals", () => {
+  const migrated = migrateStoredState({ storageVersion: 5, brainProvider: "openai", decisionHistory: [], assetDrafts: [] });
+  assert.equal(migrated.storageVersion, LATEST_STORAGE_VERSION);
+  assert.equal(migrated.brainProvider, "auto");
+  assert.deepEqual(migrated.brainUsage, { totalCalls: 0, inputTokens: 0, outputTokens: 0, totalTokens: 0, estimatedCostUsd: 0, fallbackCount: 0 });
 });
 
 test("explains its reasoning and explicitly rejects scores below a configurable threshold", () => {
@@ -330,7 +359,7 @@ test("migrates version 2 profiles without allowing completed state to hide Step 
   assert.equal(restored.completed, false);
   assert.equal(restored.completionResult, null);
   assert.equal(restored.activeDecisionId, null);
-  assert.equal(restored.brainProvider, "openai");
+  assert.equal(restored.brainProvider, "auto");
   assert.equal(restored.decisionHistory.length, 1);
   assert.equal(JSON.parse(storage.getItem(STORAGE_KEY)).completed, false);
 });
@@ -418,9 +447,10 @@ function makeApiEvaluation(provider) {
   return {
     prompt: "PROMPT_VERSION: decision.v1",
     rawResponse: JSON.stringify(structured),
+    validation: { status: "passed", schema: true, reasoning: true, deliverable: true, message: "All validation checks passed." },
     output: {
       ...structured,
-      metadata: { provider, latencyMs: 12, tokenUsage: { inputTokens: 10, outputTokens: 5, totalTokens: 15 }, fallback: false, attempts: 1, promptVersion: "decision.v1" },
+      metadata: { provider, model: provider === "openai" ? "test-model" : "Rule Engine", latencyMs: 12, tokenUsage: { inputTokens: 10, outputTokens: 5, totalTokens: 15 }, fallback: false, attempts: 1, promptVersion: "decision.v1", estimatedCostUsd: 0.0001 },
     },
   };
 }

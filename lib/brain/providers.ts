@@ -1,7 +1,7 @@
 import { decisionEngine, type DecisionEngineOptions } from "../decision-engine.ts";
 import { PromptBuilder } from "./prompt-builder.ts";
 import { parseBrainOutput } from "./schema.ts";
-import type { Brain, BrainInput, BrainOutput, BrainProviderId, BrainStructuredOutput, BrainTrace } from "./types.ts";
+import type { Brain, BrainInput, BrainOutput, BrainProviderId, BrainStructuredOutput, BrainTrace, BrainValidation } from "./types.ts";
 
 const promptBuilder = new PromptBuilder();
 
@@ -23,7 +23,7 @@ export class RuleBrainProvider implements Brain {
   }
 }
 
-type ApiResponse = { output: BrainOutput; prompt: string; rawResponse: string };
+type ApiResponse = { output: BrainOutput; prompt: string; rawResponse: string; validation: BrainValidation };
 
 export class OpenAIBrainProvider implements Brain {
   readonly #fetch: typeof fetch;
@@ -40,7 +40,7 @@ export class OpenAIBrainProvider implements Brain {
 
   async inspect(input: BrainInput): Promise<BrainTrace> {
     const response = await this.request(input);
-    return { context: input.context, prompt: response.prompt, rawResponse: response.rawResponse, parsedOutput: response.output };
+    return { context: input.context, prompt: response.prompt, rawResponse: response.rawResponse, parsedOutput: response.output, validation: response.validation };
   }
 
   private async request(input: BrainInput): Promise<ApiResponse> {
@@ -55,7 +55,7 @@ export class OpenAIBrainProvider implements Brain {
     } catch {
       const trace = await new RuleBrainProvider().inspect(input);
       const output = { ...trace.parsedOutput, metadata: { ...trace.parsedOutput.metadata, fallback: true, attempts: 0 } };
-      return { output, prompt: trace.prompt, rawResponse: trace.rawResponse };
+      return { output, prompt: trace.prompt, rawResponse: trace.rawResponse, validation: { status: "fallback", schema: false, reasoning: false, deliverable: false, message: "OpenAI is unavailable; Rules fallback used." } };
     }
   }
 }
@@ -71,7 +71,8 @@ export class GeminiBrainProvider implements Brain {
 }
 
 function metadata(provider: BrainProviderId, latencyMs: number): BrainOutput["metadata"] {
-  return { provider, latencyMs: Math.round(latencyMs), tokenUsage: null, fallback: false, attempts: 1, promptVersion: promptBuilder.version("decision") };
+  const model = provider === "rules" ? "Rule Engine" : `${provider[0].toUpperCase()}${provider.slice(1)} mock`;
+  return { provider, model, latencyMs: Math.round(latencyMs), tokenUsage: null, fallback: false, attempts: 1, promptVersion: promptBuilder.version("decision"), estimatedCostUsd: 0 };
 }
 
 function createTrace(input: BrainInput, output: BrainStructuredOutput, outputMetadata: BrainOutput["metadata"]): BrainTrace {
@@ -81,6 +82,7 @@ function createTrace(input: BrainInput, output: BrainStructuredOutput, outputMet
     prompt: promptBuilder.build(input.task, input.context),
     rawResponse,
     parsedOutput: { ...parseBrainOutput(rawResponse), metadata: outputMetadata },
+    validation: { status: "passed", schema: true, reasoning: true, deliverable: true, message: "All validation checks passed." },
   };
 }
 
