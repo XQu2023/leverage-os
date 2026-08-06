@@ -92,6 +92,8 @@ test("keeps the mobile daily flow compact and its primary action visible", async
   assert.match(page, /if \(!window\.matchMedia[\s\S]*setStep\(1\)/);
   assert.match(page, /onClick=\{openGoal\}/);
   assert.match(css, /@media\(max-width:780px\)[\s\S]*\.stepper small\{display:none\}/);
+  assert.match(css, /@media\(max-width:780px\)[\s\S]*\.sidebar nav\{display:flex/);
+  assert.match(css, /\.sidebar nav \.system-stat[^}]*display:none/);
   assert.match(css, /@media\(max-width:780px\)[\s\S]*\.actions\{position:sticky/);
   assert.match(css, /env\(safe-area-inset-bottom\)/);
   assert.match(css, /min-height:100dvh/);
