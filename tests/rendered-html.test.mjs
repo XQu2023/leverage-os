@@ -4,6 +4,7 @@ import test from "node:test";
 import { decisionEngine } from "../lib/decision-engine.ts";
 import { generateAssetDrafts } from "../lib/asset-drafts.ts";
 import { explainIncompleteDecision, generateWeeklyDecisionReport } from "../lib/decision-memory.ts";
+import { LATEST_STORAGE_VERSION, STORAGE_BACKUP_PREFIX, STORAGE_KEY, loadStoredState, migrateStoredState } from "../lib/storage.ts";
 
 async function render() {
   const html = await readFile(
@@ -39,7 +40,7 @@ test("keeps device-dependent values out of the initial render", async () => {
 
   assert.match(page, /const today = hydrated\s*\?/);
   assert.match(page, /:\s*["']今天["'];/);
-  assert.match(page, /useEffect\(\(\) => \{[\s\S]*window\.localStorage\.getItem/);
+  assert.match(page, /useEffect\(\(\) => \{[\s\S]*loadStoredState\(window\.localStorage/);
   assert.doesNotMatch(page, /useState\([^\n]*(?:new Date|Date\.now|Math\.random|toLocale)/);
 });
 
@@ -163,6 +164,43 @@ test("explains incomplete work and recommends a smaller next-day action", () => 
   assert.match(failed.tomorrowRecommendation, /不要原样重试/);
 });
 
+test("migrates unversioned and version 1 storage to the latest schema", () => {
+  const unversioned = migrateStoredState({ goal: "100 位客户", selectedAssets: ["SOP"] });
+  assert.equal(unversioned.storageVersion, LATEST_STORAGE_VERSION);
+  assert.deepEqual(unversioned.decisionHistory, []);
+  assert.deepEqual(unversioned.assetDrafts, []);
+
+  const versionOne = migrateStoredState({
+    storageVersion: 1,
+    completed: true,
+    decisionHistory: [{ id: "old", score: 85, completionStatus: "completed" }],
+  });
+  assert.equal(versionOne.storageVersion, 2);
+  assert.equal(versionOne.completionResult, "completed");
+  assert.equal(versionOne.decisionHistory[0].outcome, "Execute");
+  assert.equal(versionOne.decisionHistory[0].completionStatus, "completed");
+});
+
+test("backs up corrupt storage and resets to a safe latest state", () => {
+  const storage = new MemoryStorage([[STORAGE_KEY, "{broken-json"]]);
+  const initial = { storageVersion: LATEST_STORAGE_VERSION, goal: "", decisionHistory: [], assetDrafts: [] };
+  const restored = loadStoredState(storage, initial, 12345);
+
+  assert.deepEqual(restored, initial);
+  assert.equal(storage.getItem(`${STORAGE_BACKUP_PREFIX}12345`), "{broken-json");
+  assert.deepEqual(JSON.parse(storage.getItem(STORAGE_KEY)), initial);
+});
+
+test("writes successful upgrades back to the primary storage key", () => {
+  const storage = new MemoryStorage([[STORAGE_KEY, JSON.stringify({ goal: "旧目标" })]]);
+  const initial = { storageVersion: LATEST_STORAGE_VERSION, goal: "", decisionHistory: [], assetDrafts: [] };
+  const restored = loadStoredState(storage, initial, 12345);
+
+  assert.equal(restored.goal, "旧目标");
+  assert.equal(restored.storageVersion, 2);
+  assert.equal(JSON.parse(storage.getItem(STORAGE_KEY)).storageVersion, 2);
+});
+
 test("keeps the mobile daily flow compact and its primary action visible", async () => {
   const [page, css] = await Promise.all([
     readFile(new URL("../app/page.tsx", import.meta.url), "utf8"),
@@ -179,3 +217,19 @@ test("keeps the mobile daily flow compact and its primary action visible", async
   assert.match(css, /env\(safe-area-inset-bottom\)/);
   assert.match(css, /min-height:100dvh/);
 });
+
+class MemoryStorage {
+  #values;
+
+  constructor(entries = []) {
+    this.#values = new Map(entries);
+  }
+
+  getItem(key) {
+    return this.#values.get(key) ?? null;
+  }
+
+  setItem(key, value) {
+    this.#values.set(key, String(value));
+  }
+}

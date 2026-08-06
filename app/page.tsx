@@ -4,6 +4,7 @@ import { useEffect, useMemo, useState } from "react";
 import { decisionEngine } from "@/lib/decision-engine";
 import { generateAssetDrafts, type AssetDraft } from "@/lib/asset-drafts";
 import { explainIncompleteDecision, generateWeeklyDecisionReport, type DecisionChoice, type DecisionHistoryEntry, type WeeklyDecisionReport } from "@/lib/decision-memory";
+import { LATEST_STORAGE_VERSION, STORAGE_KEY, loadStoredState } from "@/lib/storage";
 
 type Review = {
   date: string;
@@ -18,6 +19,7 @@ type View = "today" | "assets" | "reviews" | "weekly";
 type AiChoice = DecisionChoice | null;
 
 type State = {
+  storageVersion: typeof LATEST_STORAGE_VERSION;
   goal: string;
   action: string;
   multiplier: string;
@@ -36,6 +38,7 @@ type State = {
 };
 
 const initialState: State = {
+  storageVersion: LATEST_STORAGE_VERSION,
   goal: "",
   action: "",
   multiplier: "",
@@ -52,8 +55,6 @@ const initialState: State = {
   assetDrafts: [],
   completionResult: null,
 };
-
-const STORAGE_KEY = "leverage-os-v1";
 
 function suggestMultiplier(action: string) {
   if (/客户|销售|联系|访谈|用户/.test(action)) return "把一次对话变成可复用的客户洞察模板";
@@ -85,13 +86,10 @@ export default function Home() {
 
   useEffect(() => {
     try {
-      const saved = window.localStorage.getItem(STORAGE_KEY);
-      if (saved) {
-        const parsed = JSON.parse(saved) as Partial<State>;
-        const assets = suggestAssets(parsed.action ?? "");
-        const selectedAssets = (parsed.selectedAssets ?? []).filter((asset) => assets.includes(asset));
-        setData({ ...initialState, ...parsed, decisionHistory: parsed.decisionHistory ?? [], assets, selectedAssets: selectedAssets.length ? selectedAssets : [assets[0]] });
-      }
+      const stored = loadStoredState(window.localStorage, initialState);
+      const assets = suggestAssets(stored.action);
+      const selectedAssets = stored.selectedAssets.filter((asset) => typeof asset === "string");
+      setData({ ...stored, assets, selectedAssets });
     } finally {
       setHydrated(true);
     }
