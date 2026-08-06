@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
-import { decisionEngine } from "@/lib/decision-engine";
+import { BRAIN_OPTIONS, createBrain, type BrainOutput, type BrainProviderId } from "@/lib/brain";
 import { generateAssetDrafts, type AssetDraft } from "@/lib/asset-drafts";
 import { explainIncompleteDecision, generateWeeklyDecisionReport, type DecisionChoice, type DecisionHistoryEntry, type WeeklyDecisionReport } from "@/lib/decision-memory";
 import { LATEST_STORAGE_VERSION, STORAGE_KEY, loadStoredState } from "@/lib/storage";
@@ -35,6 +35,7 @@ type State = {
   activeDecisionId: string | null;
   assetDrafts: AssetDraft[];
   completionResult: "completed" | "partial" | "failed" | null;
+  brainProvider: BrainProviderId;
 };
 
 const initialState: State = {
@@ -54,6 +55,7 @@ const initialState: State = {
   activeDecisionId: null,
   assetDrafts: [],
   completionResult: null,
+  brainProvider: "rules",
 };
 
 function suggestMultiplier(action: string) {
@@ -83,6 +85,7 @@ export default function Home() {
   const [selectedReview, setSelectedReview] = useState<number | null>(null);
   const [previewDraftId, setPreviewDraftId] = useState<string | null>(null);
   const [editingDraftId, setEditingDraftId] = useState<string | null>(null);
+  const [brainEvaluation, setBrainEvaluation] = useState<{ key: string; output: BrainOutput } | null>(null);
 
   useEffect(() => {
     try {
@@ -99,7 +102,16 @@ export default function Home() {
     if (hydrated) window.localStorage.setItem(STORAGE_KEY, JSON.stringify(data));
   }, [data, hydrated]);
 
-  const judgment = useMemo(() => decisionEngine(data.goal, data.action), [data.goal, data.action]);
+  const brain = useMemo(() => createBrain(data.brainProvider), [data.brainProvider]);
+  const evaluationKey = `${data.brainProvider}\u0000${data.goal}\u0000${data.action}`;
+  useEffect(() => {
+    let active = true;
+    brain.evaluate({ goal: data.goal, action: data.action }).then((output) => {
+      if (active) setBrainEvaluation({ key: evaluationKey, output });
+    });
+    return () => { active = false; };
+  }, [brain, data.goal, data.action, evaluationKey]);
+  const judgment = brainEvaluation?.key === evaluationKey ? brainEvaluation.output : null;
   const weeklyReport = useMemo(() => generateWeeklyDecisionReport(data.decisionHistory), [data.decisionHistory]);
   const today = hydrated
     ? new Intl.DateTimeFormat("zh-CN", { month: "long", day: "numeric", weekday: "long" }).format(new Date())
@@ -121,6 +133,7 @@ export default function Home() {
   }
 
   function chooseAiPath(choice: Exclude<AiChoice, null>) {
+    if (!judgment) return;
     const followAlternative = choice === "follow-ai" && judgment.higherLeverageAlternative;
     const action = followAlternative || data.action;
     const id = data.activeDecisionId ?? `${Date.now()}-${data.decisionHistory.length}`;
@@ -161,7 +174,7 @@ export default function Home() {
   function saveReview(completionStatus: "completed" | "partial" | "failed") {
     if (!data.biggestWaste.trim() || !data.bestAsset.trim() || !data.tomorrowFocus.trim()) return;
     const review = { date: new Date().toISOString(), action: data.action, biggestWaste: data.biggestWaste, bestAsset: data.bestAsset, tomorrowFocus: data.tomorrowFocus, multiplier: data.multiplier };
-    const incomplete = completionStatus === "completed" ? null : explainIncompleteDecision(completionStatus, data.action, data.biggestWaste, judgment.biggestRisk);
+    const incomplete = completionStatus === "completed" ? null : explainIncompleteDecision(completionStatus, data.action, data.biggestWaste, judgment?.biggestRisk ?? "完成标准未被验证");
     const decisionHistory = data.decisionHistory.map((entry) => entry.id === data.activeDecisionId
       ? { ...entry, completionStatus, biggestWaste: data.biggestWaste, aiExplanation: incomplete?.explanation, tomorrowRecommendation: incomplete?.tomorrowRecommendation }
       : entry);
@@ -261,12 +274,15 @@ export default function Home() {
             {step === 3 && <>
               <p className="kicker">03 · AI JUDGMENT</p>
               <h2>这个行动值得你投入今天吗？</h2>
+              <BrainSelector value={data.brainProvider} onChange={(brainProvider) => update({ brainProvider })} />
+              {judgment ? <>
               <div className="judgment-card">
                 <div className="score-ring" style={{ "--score": `${judgment.score * 3.6}deg` } as React.CSSProperties}><span>{judgment.score}</span><small>/ 100</small></div>
                 <div><span className="verdict">{judgment.verdict}</span><h3>{data.action}</h3><p>{judgment.whyToday}</p></div>
               </div>
               <div className="criteria"><div><span>!</span><p><strong>最大风险</strong><br />{judgment.biggestRisk}</p></div><div><span>↑</span><p><strong>更高杠杆选择</strong><br />{judgment.higherLeverageAlternative ?? "当前计划已经足够直接，建议保持。"}</p></div><div><span>✓</span><p><strong>今日交付物</strong><br />{judgment.todayDeliverable}</p></div></div>
               <details className="decision-reasoning"><summary>Why?</summary><div><strong>评分依据</strong><ul>{judgment.reasoning.score.map((reason) => <li key={reason}>{reason}</li>)}</ul><strong>风险依据</strong><p>{judgment.reasoning.risk}</p><strong>建议依据</strong><p>{judgment.reasoning.recommendation}</p></div></details>
+              </> : <div className="judgment-card brain-loading"><span className="verdict">Evaluating</span><p>Brain 正在生成判断…</p></div>}
             </>}
 
             {step === 4 && <>
@@ -306,7 +322,7 @@ export default function Home() {
 
             {!data.completed && <div className="actions">
               {step > 1 && <button className="back" onClick={() => setStep(step - 1)}>← 返回</button>}
-              {step === 3 ? <><button className="secondary" onClick={() => chooseAiPath("keep-plan")}>Keep My Plan</button><button className="primary" onClick={() => chooseAiPath("follow-ai")}>Follow AI<span>→</span></button></> : step === 6 ? <div className="completion-actions"><button disabled={!data.biggestWaste.trim() || !data.bestAsset.trim() || !data.tomorrowFocus.trim()} onClick={() => saveReview("failed")}>Failed</button><button disabled={!data.biggestWaste.trim() || !data.bestAsset.trim() || !data.tomorrowFocus.trim()} onClick={() => saveReview("partial")}>Partial</button><button className="primary" disabled={!data.biggestWaste.trim() || !data.bestAsset.trim() || !data.tomorrowFocus.trim()} onClick={() => saveReview("completed")}>Completed<span>→</span></button></div> : <button className="primary" disabled={!canContinue || (step === 5 && data.assetDrafts.every((draft) => draft.status !== "saved"))} onClick={next}>{step === 5 ? "保存资产并继续" : "继续"}<span>→</span></button>}
+              {step === 3 ? <><button className="secondary" disabled={!judgment} onClick={() => chooseAiPath("keep-plan")}>Keep My Plan</button><button className="primary" disabled={!judgment} onClick={() => chooseAiPath("follow-ai")}>Follow AI<span>→</span></button></> : step === 6 ? <div className="completion-actions"><button disabled={!data.biggestWaste.trim() || !data.bestAsset.trim() || !data.tomorrowFocus.trim()} onClick={() => saveReview("failed")}>Failed</button><button disabled={!data.biggestWaste.trim() || !data.bestAsset.trim() || !data.tomorrowFocus.trim()} onClick={() => saveReview("partial")}>Partial</button><button className="primary" disabled={!data.biggestWaste.trim() || !data.bestAsset.trim() || !data.tomorrowFocus.trim()} onClick={() => saveReview("completed")}>Completed<span>→</span></button></div> : <button className="primary" disabled={!canContinue || (step === 5 && data.assetDrafts.every((draft) => draft.status !== "saved"))} onClick={next}>{step === 5 ? "保存资产并继续" : "继续"}<span>→</span></button>}
             </div>}
           </div>
           </>}
@@ -326,6 +342,10 @@ function completionLabel(status: State["completionResult"]) {
   if (status === "partial") return "Partial";
   if (status === "failed") return "Failed";
   return "Pending";
+}
+
+function BrainSelector({ value, onChange }: { value: BrainProviderId; onChange: (provider: BrainProviderId) => void }) {
+  return <div className="brain-selector" aria-label="Brain provider">{BRAIN_OPTIONS.map((option) => <button key={option.id} type="button" className={value === option.id ? "active" : ""} aria-pressed={value === option.id} onClick={() => onChange(option.id)}>{option.label}</button>)}</div>;
 }
 
 function LibraryView({ title, kicker, empty, onBack, children }: { title: string; kicker: string; empty: string; onBack: () => void; children: React.ReactNode }) {

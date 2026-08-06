@@ -1,4 +1,4 @@
-export const LATEST_STORAGE_VERSION = 3 as const;
+export const LATEST_STORAGE_VERSION = 4 as const;
 export const STORAGE_KEY = "leverage-os-v1";
 export const STORAGE_BACKUP_PREFIX = `${STORAGE_KEY}-backup-`;
 
@@ -6,7 +6,7 @@ type StoredRecord = Record<string, unknown> & { storageVersion: number };
 
 export type StorageLike = Pick<Storage, "getItem" | "setItem">;
 
-export function migrateStoredState(value: unknown): StoredRecord & { storageVersion: 3 } {
+export function migrateStoredState(value: unknown): StoredRecord & { storageVersion: 4 } {
   if (!isRecord(value)) throw new Error("Stored state must be an object");
   let state: Record<string, unknown> = { ...value };
   let version = readVersion(state.storageVersion);
@@ -49,12 +49,22 @@ export function migrateStoredState(value: unknown): StoredRecord & { storageVers
     version = 3;
   }
 
+  if (version === 3) {
+    state = {
+      ...state,
+      brainProvider: normalizeBrainProvider(state.brainProvider),
+      storageVersion: 4,
+    };
+    version = 4;
+  }
+
   if (version !== LATEST_STORAGE_VERSION) throw new Error(`Migration stopped at version ${version}`);
   if (!Array.isArray(state.decisionHistory) || !Array.isArray(state.assetDrafts)) throw new Error("Migrated collections are invalid");
-  return state as StoredRecord & { storageVersion: 3 };
+  state.brainProvider = normalizeBrainProvider(state.brainProvider);
+  return state as StoredRecord & { storageVersion: 4 };
 }
 
-export function loadStoredState<T extends { storageVersion: 3 }>(
+export function loadStoredState<T extends { storageVersion: 4 }>(
   storage: StorageLike,
   initialState: T,
   now = Date.now(),
@@ -100,6 +110,10 @@ function migrateDecisionEntry(value: unknown): Record<string, unknown> {
 function normalizeCompletionResult(value: unknown, completed: unknown) {
   if (value === "completed" || value === "partial" || value === "failed") return value;
   return completed === true ? "completed" : null;
+}
+
+function normalizeBrainProvider(value: unknown) {
+  return value === "openai" || value === "claude" || value === "gemini" ? value : "rules";
 }
 
 function readVersion(value: unknown): number {

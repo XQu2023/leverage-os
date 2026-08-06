@@ -5,6 +5,7 @@ import { decisionEngine } from "../lib/decision-engine.ts";
 import { generateAssetDrafts } from "../lib/asset-drafts.ts";
 import { explainIncompleteDecision, generateWeeklyDecisionReport } from "../lib/decision-memory.ts";
 import { LATEST_STORAGE_VERSION, STORAGE_BACKUP_PREFIX, STORAGE_KEY, loadStoredState, migrateStoredState } from "../lib/storage.ts";
+import { BRAIN_OPTIONS, OpenAIBrainProvider, RuleBrainProvider, createBrain } from "../lib/brain/index.ts";
 
 async function render() {
   const html = await readFile(
@@ -103,12 +104,35 @@ test("generates deterministic decision guidance behind a replaceable interface",
 test("keeps the two decision paths and local choice in the page state", async () => {
   const page = await readFile(new URL("../app/page.tsx", import.meta.url), "utf8");
 
-  assert.match(page, /decisionEngine\(data\.goal, data\.action\)/);
+  assert.match(page, /brain\.evaluate\(\{ goal: data\.goal, action: data\.action \}\)/);
+  assert.doesNotMatch(page, /decisionEngine/);
   assert.match(page, /Follow AI/);
   assert.match(page, /Keep My Plan/);
   assert.match(page, /aiChoice: choice/);
   assert.match(page, /higherLeverageAlternative/);
   assert.doesNotMatch(page, /接受判断，继续/);
+});
+
+test("evaluates every provider through the same Brain interface", async () => {
+  assert.deepEqual(BRAIN_OPTIONS.map((option) => option.label), ["Rules", "OpenAI", "Claude", "Gemini"]);
+  for (const option of BRAIN_OPTIONS) {
+    const brain = createBrain(option.id);
+    const output = await brain.evaluate({ goal: "获得 100 位客户", action: "研究客户需求" });
+    assert.ok(["Execute", "Refine", "Reject Today"].includes(output.outcome));
+    assert.equal(typeof output.score, "number");
+    assert.ok(output.reasoning.score.length);
+    assert.ok(output.biggestRisk);
+  }
+});
+
+test("keeps rules deterministic and OpenAI mocked without an API call", async () => {
+  const input = { goal: "发布产品", action: "完成用户测试" };
+  const rules = new RuleBrainProvider();
+  assert.deepEqual(await rules.evaluate(input), await rules.evaluate(input));
+
+  const openai = await new OpenAIBrainProvider().evaluate(input);
+  assert.match(openai.whyToday, /OpenAI mock/);
+  assert.match(openai.reasoning.score.join(" "), /尚未调用外部模型 API/);
 });
 
 test("explains its reasoning and explicitly rejects scores below a configurable threshold", () => {
@@ -175,7 +199,7 @@ test("migrates unversioned and version 1 storage to the latest schema", () => {
     completed: true,
     decisionHistory: [{ id: "old", score: 85, completionStatus: "completed" }],
   });
-  assert.equal(versionOne.storageVersion, 3);
+  assert.equal(versionOne.storageVersion, 4);
   assert.equal(versionOne.completed, false);
   assert.equal(versionOne.completionResult, null);
   assert.equal(versionOne.decisionHistory[0].outcome, "Execute");
@@ -195,11 +219,12 @@ test("migrates version 2 profiles without allowing completed state to hide Step 
   const initial = { storageVersion: LATEST_STORAGE_VERSION, goal: "", completed: false, completionResult: null, activeDecisionId: null, decisionHistory: [], assetDrafts: [] };
   const restored = loadStoredState(storage, initial, 12345);
 
-  assert.equal(restored.storageVersion, 3);
+  assert.equal(restored.storageVersion, 4);
   assert.equal(restored.goal, "保留的年度目标");
   assert.equal(restored.completed, false);
   assert.equal(restored.completionResult, null);
   assert.equal(restored.activeDecisionId, null);
+  assert.equal(restored.brainProvider, "rules");
   assert.equal(restored.decisionHistory.length, 1);
   assert.equal(JSON.parse(storage.getItem(STORAGE_KEY)).completed, false);
 });
@@ -220,8 +245,8 @@ test("writes successful upgrades back to the primary storage key", () => {
   const restored = loadStoredState(storage, initial, 12345);
 
   assert.equal(restored.goal, "旧目标");
-  assert.equal(restored.storageVersion, 3);
-  assert.equal(JSON.parse(storage.getItem(STORAGE_KEY)).storageVersion, 3);
+  assert.equal(restored.storageVersion, 4);
+  assert.equal(JSON.parse(storage.getItem(STORAGE_KEY)).storageVersion, 4);
 });
 
 test("keeps the mobile daily flow compact and its primary action visible", async () => {
