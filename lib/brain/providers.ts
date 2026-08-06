@@ -45,17 +45,22 @@ export class OpenAIBrainProvider implements Brain {
 
   private async request(input: BrainInput): Promise<ApiResponse> {
     try {
-      const response = await this.#fetch(this.#endpoint, {
+      // Extract the native function before calling it. Calling `this.#fetch(...)`
+      // binds the provider instance as `this`, which causes an Illegal invocation
+      // in browsers whose native fetch requires the global receiver.
+      const fetchRequest = this.#fetch;
+      const response = await fetchRequest(this.#endpoint, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(input),
       });
       if (!response.ok) throw new Error(`Brain request failed: ${response.status}`);
-      return response.json() as Promise<ApiResponse>;
-    } catch {
+      return await response.json() as ApiResponse;
+    } catch (error) {
       const trace = await new RuleBrainProvider().inspect(input);
       const output = { ...trace.parsedOutput, metadata: { ...trace.parsedOutput.metadata, fallback: true, attempts: 0 } };
-      return { output, prompt: trace.prompt, rawResponse: trace.rawResponse, validation: { status: "fallback", schema: false, reasoning: false, deliverable: false, message: "OpenAI is unavailable; Rules fallback used." } };
+      const reason = error instanceof Error ? error.message : "Unknown client error";
+      return { output, prompt: trace.prompt, rawResponse: trace.rawResponse, validation: { status: "fallback", schema: false, reasoning: false, deliverable: false, message: `OpenAI is unavailable (${reason}); Rules fallback used.` } };
     }
   }
 }

@@ -142,6 +142,19 @@ test("keeps rules deterministic and routes OpenAI through the server endpoint", 
   assert.equal(openai.metadata.provider, "openai");
 });
 
+test("calls browser fetch without binding the provider as its receiver", async () => {
+  let called = false;
+  const browserLikeFetch = async function () {
+    if (this !== undefined) throw new TypeError("Illegal invocation");
+    called = true;
+    return Response.json(makeApiEvaluation("openai"));
+  };
+  const output = await new OpenAIBrainProvider(browserLikeFetch, "/api/brain/decision").evaluate(makeBrainInput("openai"));
+  assert.equal(called, true);
+  assert.equal(output.metadata.provider, "openai");
+  assert.equal(output.metadata.fallback, false);
+});
+
 test("builds bounded provider context from goals, decisions, assets, and reviews", () => {
   const context = new ContextBuilder(2).build({
     yearlyGoal: " 100 位客户 ", todayAction: " 完成访谈 ", selectedProvider: "openai",
