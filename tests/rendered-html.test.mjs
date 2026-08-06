@@ -81,3 +81,18 @@ test("links sidebar summaries to accessible asset and review libraries", async (
   assert.match(css, /\.system-stat:focus-visible/);
   assert.match(css, /\.library-row:focus-visible/);
 });
+
+test("keeps the mobile daily flow compact and its primary action visible", async () => {
+  const [page, css] = await Promise.all([
+    readFile(new URL("../app/page.tsx", import.meta.url), "utf8"),
+    readFile(new URL("../app/globals.css", import.meta.url), "utf8"),
+  ]);
+
+  assert.match(page, /window\.matchMedia\("\(max-width: 780px\)"\)\.matches/);
+  assert.match(page, /if \(!window\.matchMedia[\s\S]*setStep\(1\)/);
+  assert.match(page, /onClick=\{openGoal\}/);
+  assert.match(css, /@media\(max-width:780px\)[\s\S]*\.stepper small\{display:none\}/);
+  assert.match(css, /@media\(max-width:780px\)[\s\S]*\.actions\{position:sticky/);
+  assert.match(css, /env\(safe-area-inset-bottom\)/);
+  assert.match(css, /min-height:100dvh/);
+});

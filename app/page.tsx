@@ -133,6 +133,11 @@ export default function Home() {
     setSelectedReview(null);
   };
 
+  function openGoal() {
+    openToday();
+    if (!window.matchMedia("(max-width: 780px)").matches) setStep(1);
+  }
+
   function openAssets() {
     setView("assets");
     setSelectedAsset(null);
@@ -149,7 +154,7 @@ export default function Home() {
         <div className="brand"><span className="brand-mark">L</span><span>Leverage OS</span></div>
         <nav aria-label="主要导航">
           <button className={`nav-item ${view === "today" ? "active" : ""}`} onClick={openToday}><span>◆</span> Today</button>
-          <button className="nav-item" onClick={() => { openToday(); setStep(1); }}><span>↗</span> One-Year Goal</button>
+          <button className="nav-item" onClick={openGoal}><span>↗</span> One-Year Goal</button>
           <div className="nav-spacer" />
           <p className="nav-label">YOUR SYSTEM</p>
           <button className={`system-stat ${view === "assets" ? "active" : ""}`} onClick={openAssets} aria-label={`查看留下的资产，共 ${data.selectedAssets.length} 项`}><span>留下的资产</span><strong>{data.selectedAssets.length}</strong></button>
