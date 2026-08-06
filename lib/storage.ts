@@ -1,4 +1,4 @@
-export const LATEST_STORAGE_VERSION = 2 as const;
+export const LATEST_STORAGE_VERSION = 3 as const;
 export const STORAGE_KEY = "leverage-os-v1";
 export const STORAGE_BACKUP_PREFIX = `${STORAGE_KEY}-backup-`;
 
@@ -6,7 +6,7 @@ type StoredRecord = Record<string, unknown> & { storageVersion: number };
 
 export type StorageLike = Pick<Storage, "getItem" | "setItem">;
 
-export function migrateStoredState(value: unknown): StoredRecord & { storageVersion: 2 } {
+export function migrateStoredState(value: unknown): StoredRecord & { storageVersion: 3 } {
   if (!isRecord(value)) throw new Error("Stored state must be an object");
   let state: Record<string, unknown> = { ...value };
   let version = readVersion(state.storageVersion);
@@ -35,12 +35,26 @@ export function migrateStoredState(value: unknown): StoredRecord & { storageVers
     version = 2;
   }
 
+  if (version === 2) {
+    const history = Array.isArray(state.decisionHistory) ? state.decisionHistory : [];
+    state = {
+      ...state,
+      decisionHistory: history.map(migrateDecisionEntry),
+      assetDrafts: Array.isArray(state.assetDrafts) ? state.assetDrafts : [],
+      completed: false,
+      completionResult: null,
+      activeDecisionId: null,
+      storageVersion: 3,
+    };
+    version = 3;
+  }
+
   if (version !== LATEST_STORAGE_VERSION) throw new Error(`Migration stopped at version ${version}`);
   if (!Array.isArray(state.decisionHistory) || !Array.isArray(state.assetDrafts)) throw new Error("Migrated collections are invalid");
-  return state as StoredRecord & { storageVersion: 2 };
+  return state as StoredRecord & { storageVersion: 3 };
 }
 
-export function loadStoredState<T extends { storageVersion: 2 }>(
+export function loadStoredState<T extends { storageVersion: 3 }>(
   storage: StorageLike,
   initialState: T,
   now = Date.now(),
@@ -53,7 +67,13 @@ export function loadStoredState<T extends { storageVersion: 2 }>(
 
   try {
     const migrated = migrateStoredState(JSON.parse(raw));
-    const next = { ...initialState, ...migrated } as T;
+    const next = {
+      ...initialState,
+      ...migrated,
+      completed: false,
+      completionResult: null,
+      activeDecisionId: null,
+    } as T;
     storage.setItem(STORAGE_KEY, JSON.stringify(next));
     return next;
   } catch {

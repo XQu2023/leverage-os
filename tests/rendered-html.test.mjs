@@ -175,10 +175,33 @@ test("migrates unversioned and version 1 storage to the latest schema", () => {
     completed: true,
     decisionHistory: [{ id: "old", score: 85, completionStatus: "completed" }],
   });
-  assert.equal(versionOne.storageVersion, 2);
-  assert.equal(versionOne.completionResult, "completed");
+  assert.equal(versionOne.storageVersion, 3);
+  assert.equal(versionOne.completed, false);
+  assert.equal(versionOne.completionResult, null);
   assert.equal(versionOne.decisionHistory[0].outcome, "Execute");
   assert.equal(versionOne.decisionHistory[0].completionStatus, "completed");
+});
+
+test("migrates version 2 profiles without allowing completed state to hide Step 1", () => {
+  const storage = new MemoryStorage([[STORAGE_KEY, JSON.stringify({
+    storageVersion: 2,
+    goal: "保留的年度目标",
+    completed: true,
+    completionResult: "completed",
+    activeDecisionId: "old-active-decision",
+    decisionHistory: [{ id: "saved-history", score: 91, outcome: "Execute", completionStatus: "completed" }],
+    assetDrafts: [],
+  })]]);
+  const initial = { storageVersion: LATEST_STORAGE_VERSION, goal: "", completed: false, completionResult: null, activeDecisionId: null, decisionHistory: [], assetDrafts: [] };
+  const restored = loadStoredState(storage, initial, 12345);
+
+  assert.equal(restored.storageVersion, 3);
+  assert.equal(restored.goal, "保留的年度目标");
+  assert.equal(restored.completed, false);
+  assert.equal(restored.completionResult, null);
+  assert.equal(restored.activeDecisionId, null);
+  assert.equal(restored.decisionHistory.length, 1);
+  assert.equal(JSON.parse(storage.getItem(STORAGE_KEY)).completed, false);
 });
 
 test("backs up corrupt storage and resets to a safe latest state", () => {
@@ -197,8 +220,8 @@ test("writes successful upgrades back to the primary storage key", () => {
   const restored = loadStoredState(storage, initial, 12345);
 
   assert.equal(restored.goal, "旧目标");
-  assert.equal(restored.storageVersion, 2);
-  assert.equal(JSON.parse(storage.getItem(STORAGE_KEY)).storageVersion, 2);
+  assert.equal(restored.storageVersion, 3);
+  assert.equal(JSON.parse(storage.getItem(STORAGE_KEY)).storageVersion, 3);
 });
 
 test("keeps the mobile daily flow compact and its primary action visible", async () => {
