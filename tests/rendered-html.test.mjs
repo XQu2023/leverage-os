@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import test from "node:test";
 import { decisionEngine } from "../lib/decision-engine.ts";
+import { generateWeeklyDecisionReport } from "../lib/decision-memory.ts";
 
 async function render() {
   const html = await readFile(
@@ -103,6 +104,42 @@ test("keeps the two decision paths and local choice in the page state", async ()
   assert.match(page, /aiChoice: choice/);
   assert.match(page, /higherLeverageAlternative/);
   assert.doesNotMatch(page, /接受判断，继续/);
+});
+
+test("explains its reasoning and explicitly rejects scores below a configurable threshold", () => {
+  const decision = decisionEngine("建立一家成功的公司", "研究和规划", { rejectionThreshold: 70 });
+
+  assert.equal(decision.verdict, "Do not do this today");
+  assert.equal(decision.recommendation, "Do not do this today");
+  assert.match(decision.reasoning.recommendation, /低于可配置阈值 70/);
+  assert.ok(decision.reasoning.score.length >= 4);
+  assert.ok(decision.reasoning.risk);
+});
+
+test("builds a seven-day decision report from local history", () => {
+  const report = generateWeeklyDecisionReport([
+    { id: "1", date: "2026-08-05T09:00:00.000Z", yearlyGoal: "100 位客户", chosenAction: "完成访谈", aiRecommendation: "完成访谈", userChoice: "follow-ai", completionStatus: "completed", score: 90, risk: "缺少记录", biggestWaste: "会议" },
+    { id: "2", date: "2026-08-04T09:00:00.000Z", yearlyGoal: "100 位客户", chosenAction: "联系客户", aiRecommendation: "联系客户", userChoice: "keep-plan", completionStatus: "completed", score: 82, risk: "缺少记录", biggestWaste: "会议" },
+  ], new Date("2026-08-06T12:00:00.000Z"));
+
+  assert.equal(report.followAiRate, 50);
+  assert.equal(report.keepMyPlanRate, 50);
+  assert.equal(report.highestLeverageDecisions[0].score, 90);
+  assert.equal(report.mostCommonWaste, "会议");
+  assert.deepEqual(report.repeatedRisks, ["缺少记录"]);
+  assert.match(report.recommendation, /缺少记录/);
+});
+
+test("persists decision memory and exposes the weekly report", async () => {
+  const page = await readFile(new URL("../app/page.tsx", import.meta.url), "utf8");
+
+  assert.match(page, /<summary>Why\?<\/summary>/);
+  assert.match(page, /decisionHistory/);
+  assert.match(page, /completionStatus: "pending"/);
+  assert.match(page, /completionStatus: "completed"/);
+  assert.match(page, /WEEKLY DECISION REPORT/);
+  assert.match(page, /Follow AI rate/);
+  assert.match(page, /Keep My Plan rate/);
 });
 
 test("keeps the mobile daily flow compact and its primary action visible", async () => {
