@@ -1,11 +1,11 @@
 import { ClaudeBrainProvider, GeminiBrainProvider, OpenAIBrainProvider, RuleBrainProvider } from "./providers.ts";
 import type { Brain, BrainProviderId } from "./types.ts";
 
-export type { Brain, BrainContext, BrainInput, BrainOutput, BrainProviderId, BrainTask, BrainTrace } from "./types.ts";
+export type { Brain, BrainContext, BrainInput, BrainMetadata, BrainOutput, BrainProviderId, BrainStructuredOutput, BrainTask, BrainTrace } from "./types.ts";
 export { ClaudeBrainProvider, GeminiBrainProvider, OpenAIBrainProvider, RuleBrainProvider } from "./providers.ts";
 export { ContextBuilder } from "./context-builder.ts";
-export { PromptBuilder } from "./prompt-builder.ts";
-export { BRAIN_OUTPUT_FIELDS, parseBrainOutput } from "./schema.ts";
+export { PROMPT_VERSIONS, PromptBuilder } from "./prompt-builder.ts";
+export { BRAIN_OUTPUT_FIELDS, BRAIN_OUTPUT_JSON_SCHEMA, parseBrainOutput, validateBrainEvaluation } from "./schema.ts";
 
 export const BRAIN_OPTIONS: ReadonlyArray<{ id: BrainProviderId; label: string }> = [
   { id: "rules", label: "Rules" },

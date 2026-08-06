@@ -1,6 +1,6 @@
 export const DEFAULT_REJECTION_THRESHOLD = 60;
 
-import type { BrainOutput } from "./brain/types";
+import type { BrainStructuredOutput } from "./brain/types";
 
 export type DecisionReasoning = {
   score: string[];
@@ -8,7 +8,7 @@ export type DecisionReasoning = {
   recommendation: string;
 };
 
-export type DecisionResult = BrainOutput;
+export type DecisionResult = BrainStructuredOutput;
 
 export type DecisionEngineOptions = {
   rejectionThreshold?: number;

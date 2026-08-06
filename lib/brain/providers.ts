@@ -1,7 +1,7 @@
 import { decisionEngine, type DecisionEngineOptions } from "../decision-engine.ts";
 import { PromptBuilder } from "./prompt-builder.ts";
 import { parseBrainOutput } from "./schema.ts";
-import type { Brain, BrainInput, BrainOutput, BrainTrace } from "./types.ts";
+import type { Brain, BrainInput, BrainOutput, BrainProviderId, BrainStructuredOutput, BrainTrace } from "./types.ts";
 
 const promptBuilder = new PromptBuilder();
 
@@ -17,37 +17,74 @@ export class RuleBrainProvider implements Brain {
   }
 
   async inspect(input: BrainInput): Promise<BrainTrace> {
-    const output = decisionEngine(input.context.yearlyGoal, input.context.todayAction, this.#options);
-    return createTrace(input, output);
+    const started = performance.now();
+    const decision = decisionEngine(input.context.yearlyGoal, input.context.todayAction, this.#options);
+    return createTrace(input, decision, metadata("rules", performance.now() - started));
   }
 }
 
+type ApiResponse = { output: BrainOutput; prompt: string; rawResponse: string };
+
 export class OpenAIBrainProvider implements Brain {
-  async evaluate(input: BrainInput): Promise<BrainOutput> { return (await this.inspect(input)).parsedOutput; }
-  async inspect(input: BrainInput): Promise<BrainTrace> { return createTrace(input, mockModelOutput("OpenAI", input)); }
+  readonly #fetch: typeof fetch;
+  readonly #endpoint: string;
+
+  constructor(fetchImpl: typeof fetch = fetch, endpoint = "/api/brain/decision") {
+    this.#fetch = fetchImpl;
+    this.#endpoint = endpoint;
+  }
+
+  async evaluate(input: BrainInput): Promise<BrainOutput> {
+    return (await this.request(input)).output;
+  }
+
+  async inspect(input: BrainInput): Promise<BrainTrace> {
+    const response = await this.request(input);
+    return { context: input.context, prompt: response.prompt, rawResponse: response.rawResponse, parsedOutput: response.output };
+  }
+
+  private async request(input: BrainInput): Promise<ApiResponse> {
+    try {
+      const response = await this.#fetch(this.#endpoint, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(input),
+      });
+      if (!response.ok) throw new Error(`Brain request failed: ${response.status}`);
+      return response.json() as Promise<ApiResponse>;
+    } catch {
+      const trace = await new RuleBrainProvider().inspect(input);
+      const output = { ...trace.parsedOutput, metadata: { ...trace.parsedOutput.metadata, fallback: true, attempts: 0 } };
+      return { output, prompt: trace.prompt, rawResponse: trace.rawResponse };
+    }
+  }
 }
 
 export class ClaudeBrainProvider implements Brain {
   async evaluate(input: BrainInput): Promise<BrainOutput> { return (await this.inspect(input)).parsedOutput; }
-  async inspect(input: BrainInput): Promise<BrainTrace> { return createTrace(input, mockModelOutput("Claude", input)); }
+  async inspect(input: BrainInput): Promise<BrainTrace> { return createTrace(input, mockModelOutput("Claude", input), metadata("claude", 0)); }
 }
 
 export class GeminiBrainProvider implements Brain {
   async evaluate(input: BrainInput): Promise<BrainOutput> { return (await this.inspect(input)).parsedOutput; }
-  async inspect(input: BrainInput): Promise<BrainTrace> { return createTrace(input, mockModelOutput("Gemini", input)); }
+  async inspect(input: BrainInput): Promise<BrainTrace> { return createTrace(input, mockModelOutput("Gemini", input), metadata("gemini", 0)); }
 }
 
-function createTrace(input: BrainInput, output: BrainOutput): BrainTrace {
+function metadata(provider: BrainProviderId, latencyMs: number): BrainOutput["metadata"] {
+  return { provider, latencyMs: Math.round(latencyMs), tokenUsage: null, fallback: false, attempts: 1, promptVersion: promptBuilder.version("decision") };
+}
+
+function createTrace(input: BrainInput, output: BrainStructuredOutput, outputMetadata: BrainOutput["metadata"]): BrainTrace {
   const rawResponse = JSON.stringify(output);
   return {
     context: input.context,
     prompt: promptBuilder.build(input.task, input.context),
     rawResponse,
-    parsedOutput: parseBrainOutput(rawResponse),
+    parsedOutput: { ...parseBrainOutput(rawResponse), metadata: outputMetadata },
   };
 }
 
-function mockModelOutput(provider: string, input: BrainInput): BrainOutput {
+function mockModelOutput(provider: string, input: BrainInput): BrainStructuredOutput {
   const action = input.context.todayAction.trim() || "当前行动";
   return {
     outcome: "Refine",

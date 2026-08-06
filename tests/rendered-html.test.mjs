@@ -5,7 +5,8 @@ import { decisionEngine } from "../lib/decision-engine.ts";
 import { generateAssetDrafts } from "../lib/asset-drafts.ts";
 import { explainIncompleteDecision, generateWeeklyDecisionReport } from "../lib/decision-memory.ts";
 import { LATEST_STORAGE_VERSION, STORAGE_BACKUP_PREFIX, STORAGE_KEY, loadStoredState, migrateStoredState } from "../lib/storage.ts";
-import { BRAIN_OPTIONS, ContextBuilder, OpenAIBrainProvider, PromptBuilder, RuleBrainProvider, createBrain, parseBrainOutput } from "../lib/brain/index.ts";
+import { BRAIN_OPTIONS, ContextBuilder, OpenAIBrainProvider, PROMPT_VERSIONS, PromptBuilder, RuleBrainProvider, createBrain, parseBrainOutput } from "../lib/brain/index.ts";
+import { evaluateOpenAIDecision } from "../lib/brain/openai-server.ts";
 
 async function render() {
   const html = await readFile(
@@ -116,7 +117,9 @@ test("keeps the two decision paths and local choice in the page state", async ()
 test("evaluates every provider through the same Brain interface", async () => {
   assert.deepEqual(BRAIN_OPTIONS.map((option) => option.label), ["Rules", "OpenAI", "Claude", "Gemini"]);
   for (const option of BRAIN_OPTIONS) {
-    const brain = createBrain(option.id);
+    const brain = option.id === "openai"
+      ? new OpenAIBrainProvider(async () => Response.json(makeApiEvaluation("openai")), "https://example.test/brain")
+      : createBrain(option.id);
     const output = await brain.evaluate(makeBrainInput(option.id));
     assert.ok(["Execute", "Refine", "Reject Today"].includes(output.outcome));
     assert.equal(typeof output.score, "number");
@@ -125,14 +128,18 @@ test("evaluates every provider through the same Brain interface", async () => {
   }
 });
 
-test("keeps rules deterministic and OpenAI mocked without an API call", async () => {
+test("keeps rules deterministic and routes OpenAI through the server endpoint", async () => {
   const input = makeBrainInput("rules", "发布产品", "完成用户测试");
   const rules = new RuleBrainProvider();
   assert.deepEqual(await rules.evaluate(input), await rules.evaluate(input));
 
-  const openai = await new OpenAIBrainProvider().evaluate(makeBrainInput("openai", "发布产品", "完成用户测试"));
-  assert.match(openai.whyToday, /OpenAI mock/);
-  assert.match(openai.reasoning.score.join(" "), /尚未调用外部模型 API/);
+  let requestedUrl = "";
+  const openai = await new OpenAIBrainProvider(async (url) => {
+    requestedUrl = String(url);
+    return Response.json(makeApiEvaluation("openai"));
+  }, "https://example.test/api/brain/decision").evaluate(makeBrainInput("openai", "发布产品", "完成用户测试"));
+  assert.equal(requestedUrl, "https://example.test/api/brain/decision");
+  assert.equal(openai.metadata.provider, "openai");
 });
 
 test("builds bounded provider context from goals, decisions, assets, and reviews", () => {
@@ -157,15 +164,69 @@ test("keeps separate prompt templates for all four Brain tasks", () => {
     const prompt = builder.build(task, context);
     assert.match(prompt, new RegExp(`TASK: ${task.toUpperCase()}`));
     assert.match(prompt, /Return JSON only/);
+    assert.match(prompt, new RegExp(`PROMPT_VERSION: ${PROMPT_VERSIONS[task]}`));
     assert.match(prompt, /yearlyGoal/);
   }
 });
 
 test("enforces one structured JSON output schema for provider responses", async () => {
   const trace = await createBrain("claude").inspect(makeBrainInput("claude"));
-  assert.deepEqual(parseBrainOutput(trace.rawResponse), trace.parsedOutput);
+  const structuredOutput = { ...trace.parsedOutput };
+  delete structuredOutput.metadata;
+  assert.deepEqual(parseBrainOutput(trace.rawResponse), structuredOutput);
   assert.throws(() => parseBrainOutput('{"outcome":"Execute"}'), /missing required fields/);
   assert.throws(() => parseBrainOutput('{broken'), SyntaxError);
+});
+
+test("retries OpenAI once, validates the result, and records usage metadata", async () => {
+  let calls = 0;
+  const valid = makeStructuredOutput();
+  const invalid = { ...valid, reasoning: { ...valid.reasoning, score: ["only one factor"] } };
+  const result = await evaluateOpenAIDecision(makeBrainInput("openai"), {
+    apiKey: "test-key",
+    model: "test-model",
+    now: (() => { let time = 100; return () => (time += 25); })(),
+    fetchImpl: async (_url, init) => {
+      calls += 1;
+      const request = JSON.parse(init.body);
+      assert.equal(request.text.format.strict, true);
+      assert.equal(request.text.format.type, "json_schema");
+      return Response.json({ output_text: JSON.stringify(calls === 1 ? invalid : valid), usage: { input_tokens: 10, output_tokens: 5, total_tokens: 15 } });
+    },
+  });
+  assert.equal(calls, 2);
+  assert.equal(result.output.metadata.provider, "openai");
+  assert.equal(result.output.metadata.fallback, false);
+  assert.equal(result.output.metadata.attempts, 2);
+  assert.deepEqual(result.output.metadata.tokenUsage, { inputTokens: 20, outputTokens: 10, totalTokens: 30 });
+});
+
+test("falls back to rules after two invalid OpenAI evaluations", async () => {
+  let calls = 0;
+  const result = await evaluateOpenAIDecision(makeBrainInput("openai"), {
+    apiKey: "test-key",
+    fetchImpl: async () => {
+      calls += 1;
+      return Response.json({ output_text: '{"outcome":"Execute"}', usage: { input_tokens: 2, output_tokens: 1, total_tokens: 3 } });
+    },
+  });
+  assert.equal(calls, 2);
+  assert.equal(result.output.metadata.provider, "rules");
+  assert.equal(result.output.metadata.fallback, true);
+  assert.equal(result.output.metadata.attempts, 2);
+  assert.deepEqual(result.output.metadata.tokenUsage, { inputTokens: 4, outputTokens: 2, totalTokens: 6 });
+});
+
+test("falls back without a network request when no API key is configured", async () => {
+  let calls = 0;
+  const result = await evaluateOpenAIDecision(makeBrainInput("openai"), {
+    apiKey: "",
+    fetchImpl: async () => { calls += 1; throw new Error("must not call"); },
+  });
+  assert.equal(calls, 0);
+  assert.equal(result.output.metadata.provider, "rules");
+  assert.equal(result.output.metadata.fallback, true);
+  assert.equal(result.output.metadata.attempts, 0);
 });
 
 test("includes a development-only Prompt Playground trace without production markup", async () => {
@@ -244,7 +305,7 @@ test("migrates unversioned and version 1 storage to the latest schema", () => {
     completed: true,
     decisionHistory: [{ id: "old", score: 85, completionStatus: "completed" }],
   });
-  assert.equal(versionOne.storageVersion, 4);
+  assert.equal(versionOne.storageVersion, LATEST_STORAGE_VERSION);
   assert.equal(versionOne.completed, false);
   assert.equal(versionOne.completionResult, null);
   assert.equal(versionOne.decisionHistory[0].outcome, "Execute");
@@ -264,12 +325,12 @@ test("migrates version 2 profiles without allowing completed state to hide Step 
   const initial = { storageVersion: LATEST_STORAGE_VERSION, goal: "", completed: false, completionResult: null, activeDecisionId: null, decisionHistory: [], assetDrafts: [] };
   const restored = loadStoredState(storage, initial, 12345);
 
-  assert.equal(restored.storageVersion, 4);
+  assert.equal(restored.storageVersion, LATEST_STORAGE_VERSION);
   assert.equal(restored.goal, "保留的年度目标");
   assert.equal(restored.completed, false);
   assert.equal(restored.completionResult, null);
   assert.equal(restored.activeDecisionId, null);
-  assert.equal(restored.brainProvider, "rules");
+  assert.equal(restored.brainProvider, "openai");
   assert.equal(restored.decisionHistory.length, 1);
   assert.equal(JSON.parse(storage.getItem(STORAGE_KEY)).completed, false);
 });
@@ -290,8 +351,8 @@ test("writes successful upgrades back to the primary storage key", () => {
   const restored = loadStoredState(storage, initial, 12345);
 
   assert.equal(restored.goal, "旧目标");
-  assert.equal(restored.storageVersion, 4);
-  assert.equal(JSON.parse(storage.getItem(STORAGE_KEY)).storageVersion, 4);
+  assert.equal(restored.storageVersion, LATEST_STORAGE_VERSION);
+  assert.equal(JSON.parse(storage.getItem(STORAGE_KEY)).storageVersion, LATEST_STORAGE_VERSION);
 });
 
 test("keeps the mobile daily flow compact and its primary action visible", async () => {
@@ -331,5 +392,35 @@ function makeBrainInput(selectedProvider = "rules", yearlyGoal = "获得 100 位
   return {
     task: "decision",
     context: { yearlyGoal, todayAction, recentDecisionHistory: [], recentAssets: [], recentReviews: [], selectedProvider },
+  };
+}
+
+function makeStructuredOutput() {
+  return {
+    outcome: "Execute",
+    score: 88,
+    verdict: "Execute",
+    recommendation: "今天执行并收集真实反馈。",
+    whyToday: "它直接推进年度目标，并能在今天形成外部证据。",
+    biggestRisk: "范围扩大，导致今天无法交付。",
+    higherLeverageAlternative: null,
+    todayDeliverable: "今天发布 1 个可分享页面并记录 3 条用户反馈。",
+    reasoning: {
+      score: ["行动直接连接年度目标。", "今天可以产出可验证结果。"],
+      risk: "如果不限制范围，交付时间会被推迟。",
+      recommendation: "先完成最小版本，再根据反馈迭代。",
+    },
+  };
+}
+
+function makeApiEvaluation(provider) {
+  const structured = makeStructuredOutput();
+  return {
+    prompt: "PROMPT_VERSION: decision.v1",
+    rawResponse: JSON.stringify(structured),
+    output: {
+      ...structured,
+      metadata: { provider, latencyMs: 12, tokenUsage: { inputTokens: 10, outputTokens: 5, totalTokens: 15 }, fallback: false, attempts: 1, promptVersion: "decision.v1" },
+    },
   };
 }

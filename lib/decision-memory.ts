@@ -12,6 +12,10 @@ export type DecisionHistoryEntry = {
   score: number;
   risk: string;
   biggestWaste: string;
+  provider: "rules" | "openai" | "claude" | "gemini";
+  latencyMs: number;
+  tokenUsage: { inputTokens: number; outputTokens: number; totalTokens: number } | null;
+  fallback: boolean;
   aiExplanation?: string;
   tomorrowRecommendation?: string;
 };

@@ -1,4 +1,4 @@
-export const LATEST_STORAGE_VERSION = 4 as const;
+export const LATEST_STORAGE_VERSION = 5 as const;
 export const STORAGE_KEY = "leverage-os-v1";
 export const STORAGE_BACKUP_PREFIX = `${STORAGE_KEY}-backup-`;
 
@@ -6,7 +6,7 @@ type StoredRecord = Record<string, unknown> & { storageVersion: number };
 
 export type StorageLike = Pick<Storage, "getItem" | "setItem">;
 
-export function migrateStoredState(value: unknown): StoredRecord & { storageVersion: 4 } {
+export function migrateStoredState(value: unknown): StoredRecord & { storageVersion: 5 } {
   if (!isRecord(value)) throw new Error("Stored state must be an object");
   let state: Record<string, unknown> = { ...value };
   let version = readVersion(state.storageVersion);
@@ -58,13 +58,24 @@ export function migrateStoredState(value: unknown): StoredRecord & { storageVers
     version = 4;
   }
 
+  if (version === 4) {
+    const history = Array.isArray(state.decisionHistory) ? state.decisionHistory : [];
+    state = {
+      ...state,
+      decisionHistory: history.map(migrateDecisionEntry),
+      brainProvider: "openai",
+      storageVersion: 5,
+    };
+    version = 5;
+  }
+
   if (version !== LATEST_STORAGE_VERSION) throw new Error(`Migration stopped at version ${version}`);
   if (!Array.isArray(state.decisionHistory) || !Array.isArray(state.assetDrafts)) throw new Error("Migrated collections are invalid");
   state.brainProvider = normalizeBrainProvider(state.brainProvider);
-  return state as StoredRecord & { storageVersion: 4 };
+  return state as StoredRecord & { storageVersion: 5 };
 }
 
-export function loadStoredState<T extends { storageVersion: 4 }>(
+export function loadStoredState<T extends { storageVersion: 5 }>(
   storage: StorageLike,
   initialState: T,
   now = Date.now(),
@@ -104,7 +115,22 @@ function migrateDecisionEntry(value: unknown): Record<string, unknown> {
   const completionStatus = value.completionStatus === "completed" || value.completionStatus === "partial" || value.completionStatus === "failed"
     ? value.completionStatus
     : "pending";
-  return { ...value, outcome, completionStatus };
+  const provider = value.provider === "openai" || value.provider === "claude" || value.provider === "gemini" ? value.provider : "rules";
+  const tokenUsage = isRecord(value.tokenUsage)
+    && typeof value.tokenUsage.inputTokens === "number"
+    && typeof value.tokenUsage.outputTokens === "number"
+    && typeof value.tokenUsage.totalTokens === "number"
+    ? value.tokenUsage
+    : null;
+  return {
+    ...value,
+    outcome,
+    completionStatus,
+    provider,
+    latencyMs: typeof value.latencyMs === "number" ? value.latencyMs : 0,
+    tokenUsage,
+    fallback: value.fallback === true,
+  };
 }
 
 function normalizeCompletionResult(value: unknown, completed: unknown) {

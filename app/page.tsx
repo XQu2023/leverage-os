@@ -56,7 +56,7 @@ const initialState: State = {
   activeDecisionId: null,
   assetDrafts: [],
   completionResult: null,
-  brainProvider: "rules",
+  brainProvider: "openai",
 };
 
 function suggestMultiplier(action: string) {
@@ -166,6 +166,10 @@ export default function Home() {
       score: judgment.score,
       risk: judgment.biggestRisk,
       biggestWaste: "",
+      provider: judgment.metadata.provider,
+      latencyMs: judgment.metadata.latencyMs,
+      tokenUsage: judgment.metadata.tokenUsage,
+      fallback: judgment.metadata.fallback,
     };
     const decisionHistory = data.activeDecisionId
       ? data.decisionHistory.map((item) => item.id === id ? entry : item)

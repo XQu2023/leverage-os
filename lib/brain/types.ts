@@ -20,7 +20,7 @@ export type BrainReasoning = {
   recommendation: string;
 };
 
-export type BrainOutput = {
+export type BrainStructuredOutput = {
   outcome: "Execute" | "Refine" | "Reject Today";
   score: number;
   verdict: string;
@@ -31,6 +31,17 @@ export type BrainOutput = {
   todayDeliverable: string;
   reasoning: BrainReasoning;
 };
+
+export type BrainMetadata = {
+  provider: BrainProviderId;
+  latencyMs: number;
+  tokenUsage: { inputTokens: number; outputTokens: number; totalTokens: number } | null;
+  fallback: boolean;
+  attempts: number;
+  promptVersion: string;
+};
+
+export type BrainOutput = BrainStructuredOutput & { metadata: BrainMetadata };
 
 export interface Brain {
   evaluate(input: BrainInput): Promise<BrainOutput>;

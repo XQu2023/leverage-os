@@ -7,13 +7,25 @@ const TEMPLATE_INSTRUCTIONS: Record<BrainTask, string> = {
   review: "Explain the result, identify the main failure pattern, and recommend tomorrow's smallest verifiable action.",
 };
 
+export const PROMPT_VERSIONS: Record<BrainTask, string> = {
+  decision: "decision.v1",
+  multiplier: "multiplier.v1",
+  asset: "asset.v1",
+  review: "review.v1",
+};
+
 export class PromptBuilder {
   build(task: BrainTask, context: BrainContext): string {
     return [
+      `PROMPT_VERSION: ${this.version(task)}`,
       `TASK: ${task.toUpperCase()}`,
       TEMPLATE_INSTRUCTIONS[task],
       "Return JSON only. Use the shared BrainOutput schema with no additional top-level fields.",
       `CONTEXT:\n${JSON.stringify(context, null, 2)}`,
     ].join("\n\n");
+  }
+
+  version(task: BrainTask): string {
+    return PROMPT_VERSIONS[task];
   }
 }
