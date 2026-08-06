@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
+import { decisionEngine } from "@/lib/decision-engine";
 
 type Review = {
   date: string;
@@ -12,6 +13,7 @@ type Review = {
 };
 
 type View = "today" | "assets" | "reviews";
+type AiChoice = "follow-ai" | "keep-plan" | null;
 
 type State = {
   goal: string;
@@ -24,6 +26,7 @@ type State = {
   bestAsset: string;
   tomorrowFocus: string;
   reviews: Review[];
+  aiChoice: AiChoice;
 };
 
 const initialState: State = {
@@ -37,24 +40,10 @@ const initialState: State = {
   bestAsset: "",
   tomorrowFocus: "",
   reviews: [],
+  aiChoice: null,
 };
 
 const STORAGE_KEY = "leverage-os-v1";
-
-function judgeAction(goal: string, action: string) {
-  const text = action.toLowerCase();
-  const concrete = /发布|完成|联系|访谈|销售|交付|测试|签约|launch|ship|call|sell|publish/.test(text);
-  const vague = /研究|看看|学习|整理|想想|research|learn|explore/.test(text);
-  const aligned = goal && action && goal.split(/[，。,.\s]/).filter((w) => w.length > 1).some((w) => action.includes(w));
-  const score = Math.min(96, 58 + (concrete ? 19 : 7) + (aligned ? 13 : 5) - (vague ? 12 : 0));
-  return {
-    score,
-    verdict: score >= 78 ? "高杠杆行动" : score >= 65 ? "方向正确，需要收窄" : "先让行动更具体",
-    reason: concrete
-      ? "它会产生可验证的外部结果，而不只是内部准备。"
-      : "它与年度目标相关，但最好明确一个今天能交付的结果。",
-  };
-}
 
 function suggestMultiplier(action: string) {
   if (/客户|销售|联系|访谈|用户/.test(action)) return "把一次对话变成可复用的客户洞察模板";
@@ -100,7 +89,7 @@ export default function Home() {
     if (hydrated) window.localStorage.setItem(STORAGE_KEY, JSON.stringify(data));
   }, [data, hydrated]);
 
-  const judgment = useMemo(() => judgeAction(data.goal, data.action), [data.goal, data.action]);
+  const judgment = useMemo(() => decisionEngine(data.goal, data.action), [data.goal, data.action]);
   const today = hydrated
     ? new Intl.DateTimeFormat("zh-CN", { month: "long", day: "numeric", weekday: "long" }).format(new Date())
     : "今天";
@@ -118,6 +107,13 @@ export default function Home() {
   function next() {
     if (step === 2 && !data.multiplier) update({ multiplier: suggestMultiplier(data.action) });
     goToStep(Math.min(6, step + 1));
+  }
+
+  function chooseAiPath(choice: Exclude<AiChoice, null>) {
+    const followAlternative = choice === "follow-ai" && judgment.higherLeverageAlternative;
+    const action = followAlternative || data.action;
+    update({ aiChoice: choice, action, multiplier: suggestMultiplier(action) });
+    goToStep(4);
   }
 
   function saveReview() {
@@ -203,7 +199,7 @@ export default function Home() {
               <p className="kicker">02 · TODAY&apos;S HIGHEST LEVERAGE ACTION</p>
               <h2>今天哪一个行动，最能推动这个目标？</h2>
               <div className="goal-context"><span>一年目标</span><p>{data.goal}</p></div>
-              <textarea className="hero-input" value={data.action} onChange={(e) => update({ action: e.target.value })} placeholder="写下一个今天可以完成、会产生真实结果的行动…" autoFocus />
+              <textarea className="hero-input" value={data.action} onChange={(e) => update({ action: e.target.value, aiChoice: null })} placeholder="写下一个今天可以完成、会产生真实结果的行动…" autoFocus />
               <div className="constraint"><span>1</span><p><strong>只选一个</strong><br />不是待办清单，而是今天最重要的下注。</p></div>
             </>}
 
@@ -212,9 +208,9 @@ export default function Home() {
               <h2>这个行动值得你投入今天吗？</h2>
               <div className="judgment-card">
                 <div className="score-ring" style={{ "--score": `${judgment.score * 3.6}deg` } as React.CSSProperties}><span>{judgment.score}</span><small>/ 100</small></div>
-                <div><span className="verdict">{judgment.verdict}</span><h3>{data.action}</h3><p>{judgment.reason}</p></div>
+                <div><span className="verdict">{judgment.verdict}</span><h3>{data.action}</h3><p>{judgment.whyToday}</p></div>
               </div>
-              <div className="criteria"><div><span>✓</span><p><strong>目标对齐</strong><br />直接服务于一年目标</p></div><div><span>✓</span><p><strong>结果导向</strong><br />今天可以验证进展</p></div><div><span>↑</span><p><strong>杠杆潜力</strong><br />能为未来创造复利</p></div></div>
+              <div className="criteria"><div><span>!</span><p><strong>最大风险</strong><br />{judgment.biggestRisk}</p></div><div><span>↑</span><p><strong>更高杠杆选择</strong><br />{judgment.higherLeverageAlternative ?? "当前计划已经足够直接，建议保持。"}</p></div><div><span>✓</span><p><strong>今日交付物</strong><br />{judgment.todayDeliverable}</p></div></div>
             </>}
 
             {step === 4 && <>
@@ -242,7 +238,7 @@ export default function Home() {
               {data.completed ? <div className="completion">
                 <div className="completion-mark">✓</div><h3>Daily review saved</h3><p>你完成了今天的最高杠杆行动，并留下 {data.selectedAssets.length} 项可复用资产。</p>
                 <div className="summary-row"><span>行动</span><strong>{data.action}</strong></div><div className="summary-row"><span>乘数</span><strong>{data.multiplier}</strong></div>
-                <button className="secondary" onClick={() => { update({ action: "", multiplier: "", completed: false, assets: [], selectedAssets: [], biggestWaste: "", bestAsset: "", tomorrowFocus: "" }); setStep(2); }}>开始新的一天 →</button>
+                <button className="secondary" onClick={() => { update({ action: "", multiplier: "", completed: false, assets: [], selectedAssets: [], biggestWaste: "", bestAsset: "", tomorrowFocus: "", aiChoice: null }); setStep(2); }}>开始新的一天 →</button>
               </div> : <div className="review-form">
                 <label><span>Biggest Waste</span><strong>今天最大的浪费是什么？</strong><textarea value={data.biggestWaste} onChange={(e) => update({ biggestWaste: e.target.value })} placeholder="以后可以删除、委派或自动化什么？" /></label>
                 <label><span>Best Asset Created</span><strong>今天留下的最佳资产是什么？</strong><textarea value={data.bestAsset} onChange={(e) => update({ bestAsset: e.target.value })} placeholder="SOP、Prompt、案例或决策原则…" /></label>
@@ -252,7 +248,7 @@ export default function Home() {
 
             {!data.completed && <div className="actions">
               {step > 1 && <button className="back" onClick={() => setStep(step - 1)}>← 返回</button>}
-              <button className="primary" disabled={!canContinue || (step === 5 && data.selectedAssets.length === 0) || (step === 6 && (!data.biggestWaste.trim() || !data.bestAsset.trim() || !data.tomorrowFocus.trim()))} onClick={step === 6 ? saveReview : next}>{step === 6 ? "保存并完成" : step === 5 ? "保存资产并继续" : step === 3 ? "接受判断，继续" : "继续"}<span>→</span></button>
+              {step === 3 ? <><button className="secondary" onClick={() => chooseAiPath("keep-plan")}>Keep My Plan</button><button className="primary" onClick={() => chooseAiPath("follow-ai")}>Follow AI<span>→</span></button></> : <button className="primary" disabled={!canContinue || (step === 5 && data.selectedAssets.length === 0) || (step === 6 && (!data.biggestWaste.trim() || !data.bestAsset.trim() || !data.tomorrowFocus.trim()))} onClick={step === 6 ? saveReview : next}>{step === 6 ? "保存并完成" : step === 5 ? "保存资产并继续" : "继续"}<span>→</span></button>}
             </div>}
           </div>
           </>}

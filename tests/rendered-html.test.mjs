@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import test from "node:test";
+import { decisionEngine } from "../lib/decision-engine.ts";
 
 async function render() {
   const html = await readFile(
@@ -80,6 +81,28 @@ test("links sidebar summaries to accessible asset and review libraries", async (
   assert.match(css, /\.system-stat:hover/);
   assert.match(css, /\.system-stat:focus-visible/);
   assert.match(css, /\.library-row:focus-visible/);
+});
+
+test("generates deterministic decision guidance behind a replaceable interface", () => {
+  const first = decisionEngine("一年内获得 100 位客户", "研究客户需求");
+  const second = decisionEngine("一年内获得 100 位客户", "研究客户需求");
+
+  assert.deepEqual(first, second);
+  assert.ok(first.whyToday);
+  assert.ok(first.biggestRisk);
+  assert.ok(first.higherLeverageAlternative);
+  assert.ok(first.todayDeliverable);
+});
+
+test("keeps the two decision paths and local choice in the page state", async () => {
+  const page = await readFile(new URL("../app/page.tsx", import.meta.url), "utf8");
+
+  assert.match(page, /decisionEngine\(data\.goal, data\.action\)/);
+  assert.match(page, /Follow AI/);
+  assert.match(page, /Keep My Plan/);
+  assert.match(page, /aiChoice: choice/);
+  assert.match(page, /higherLeverageAlternative/);
+  assert.doesNotMatch(page, /接受判断，继续/);
 });
 
 test("keeps the mobile daily flow compact and its primary action visible", async () => {
