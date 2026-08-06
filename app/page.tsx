@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
-import { BRAIN_OPTIONS, createBrain, type BrainOutput, type BrainProviderId } from "@/lib/brain";
+import { BRAIN_OPTIONS, ContextBuilder, createBrain, type BrainOutput, type BrainProviderId, type BrainTrace } from "@/lib/brain";
 import { generateAssetDrafts, type AssetDraft } from "@/lib/asset-drafts";
 import { explainIncompleteDecision, generateWeeklyDecisionReport, type DecisionChoice, type DecisionHistoryEntry, type WeeklyDecisionReport } from "@/lib/decision-memory";
 import { LATEST_STORAGE_VERSION, STORAGE_KEY, loadStoredState } from "@/lib/storage";
@@ -17,6 +17,7 @@ type Review = {
 
 type View = "today" | "assets" | "reviews" | "weekly";
 type AiChoice = DecisionChoice | null;
+const contextBuilder = new ContextBuilder();
 
 type State = {
   storageVersion: typeof LATEST_STORAGE_VERSION;
@@ -86,6 +87,7 @@ export default function Home() {
   const [previewDraftId, setPreviewDraftId] = useState<string | null>(null);
   const [editingDraftId, setEditingDraftId] = useState<string | null>(null);
   const [brainEvaluation, setBrainEvaluation] = useState<{ key: string; output: BrainOutput } | null>(null);
+  const [brainTrace, setBrainTrace] = useState<{ key: string; trace: BrainTrace } | null>(null);
 
   useEffect(() => {
     try {
@@ -103,15 +105,30 @@ export default function Home() {
   }, [data, hydrated]);
 
   const brain = useMemo(() => createBrain(data.brainProvider), [data.brainProvider]);
-  const evaluationKey = `${data.brainProvider}\u0000${data.goal}\u0000${data.action}`;
+  const brainContext = useMemo(() => contextBuilder.build({
+    yearlyGoal: data.goal,
+    todayAction: data.action,
+    decisionHistory: data.decisionHistory,
+    assets: data.assetDrafts.filter((draft) => draft.status === "saved"),
+    reviews: data.reviews,
+    selectedProvider: data.brainProvider,
+  }), [data.goal, data.action, data.decisionHistory, data.assetDrafts, data.reviews, data.brainProvider]);
+  const brainInput = useMemo(() => ({ task: "decision" as const, context: brainContext }), [brainContext]);
+  const evaluationKey = JSON.stringify(brainInput);
   useEffect(() => {
     let active = true;
-    brain.evaluate({ goal: data.goal, action: data.action }).then((output) => {
+    brain.evaluate(brainInput).then((output) => {
       if (active) setBrainEvaluation({ key: evaluationKey, output });
     });
+    if (process.env.NODE_ENV !== "production") {
+      brain.inspect(brainInput).then((trace) => {
+        if (active) setBrainTrace({ key: evaluationKey, trace });
+      });
+    }
     return () => { active = false; };
-  }, [brain, data.goal, data.action, evaluationKey]);
+  }, [brain, brainInput, evaluationKey]);
   const judgment = brainEvaluation?.key === evaluationKey ? brainEvaluation.output : null;
+  const developerTrace = brainTrace?.key === evaluationKey ? brainTrace.trace : null;
   const weeklyReport = useMemo(() => generateWeeklyDecisionReport(data.decisionHistory), [data.decisionHistory]);
   const today = hydrated
     ? new Intl.DateTimeFormat("zh-CN", { month: "long", day: "numeric", weekday: "long" }).format(new Date())
@@ -282,6 +299,7 @@ export default function Home() {
               </div>
               <div className="criteria"><div><span>!</span><p><strong>最大风险</strong><br />{judgment.biggestRisk}</p></div><div><span>↑</span><p><strong>更高杠杆选择</strong><br />{judgment.higherLeverageAlternative ?? "当前计划已经足够直接，建议保持。"}</p></div><div><span>✓</span><p><strong>今日交付物</strong><br />{judgment.todayDeliverable}</p></div></div>
               <details className="decision-reasoning"><summary>Why?</summary><div><strong>评分依据</strong><ul>{judgment.reasoning.score.map((reason) => <li key={reason}>{reason}</li>)}</ul><strong>风险依据</strong><p>{judgment.reasoning.risk}</p><strong>建议依据</strong><p>{judgment.reasoning.recommendation}</p></div></details>
+              {process.env.NODE_ENV !== "production" && developerTrace && <PromptPlayground trace={developerTrace} />}
               </> : <div className="judgment-card brain-loading"><span className="verdict">Evaluating</span><p>Brain 正在生成判断…</p></div>}
             </>}
 
@@ -346,6 +364,14 @@ function completionLabel(status: State["completionResult"]) {
 
 function BrainSelector({ value, onChange }: { value: BrainProviderId; onChange: (provider: BrainProviderId) => void }) {
   return <div className="brain-selector" aria-label="Brain provider">{BRAIN_OPTIONS.map((option) => <button key={option.id} type="button" className={value === option.id ? "active" : ""} aria-pressed={value === option.id} onClick={() => onChange(option.id)}>{option.label}</button>)}</div>;
+}
+
+function PromptPlayground({ trace }: { trace: BrainTrace }) {
+  return <details className="prompt-playground"><summary>Prompt Playground</summary><div><PlaygroundValue label="Generated Context" value={trace.context} /><PlaygroundValue label="Generated Prompt" value={trace.prompt} /><PlaygroundValue label="Raw Provider Response" value={trace.rawResponse} /><PlaygroundValue label="Parsed Output" value={trace.parsedOutput} /></div></details>;
+}
+
+function PlaygroundValue({ label, value }: { label: string; value: unknown }) {
+  return <section><strong>{label}</strong><pre>{typeof value === "string" ? value : JSON.stringify(value, null, 2)}</pre></section>;
 }
 
 function LibraryView({ title, kicker, empty, onBack, children }: { title: string; kicker: string; empty: string; onBack: () => void; children: React.ReactNode }) {

@@ -1,6 +1,17 @@
+export type BrainTask = "decision" | "multiplier" | "asset" | "review";
+
+export type BrainContext = {
+  yearlyGoal: string;
+  todayAction: string;
+  recentDecisionHistory: Array<Record<string, unknown>>;
+  recentAssets: Array<Record<string, unknown>>;
+  recentReviews: Array<Record<string, unknown>>;
+  selectedProvider: BrainProviderId;
+};
+
 export type BrainInput = {
-  goal: string;
-  action: string;
+  task: BrainTask;
+  context: BrainContext;
 };
 
 export type BrainReasoning = {
@@ -23,6 +34,14 @@ export type BrainOutput = {
 
 export interface Brain {
   evaluate(input: BrainInput): Promise<BrainOutput>;
+  inspect(input: BrainInput): Promise<BrainTrace>;
 }
+
+export type BrainTrace = {
+  context: BrainContext;
+  prompt: string;
+  rawResponse: string;
+  parsedOutput: BrainOutput;
+};
 
 export type BrainProviderId = "rules" | "openai" | "claude" | "gemini";

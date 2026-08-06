@@ -5,7 +5,7 @@ import { decisionEngine } from "../lib/decision-engine.ts";
 import { generateAssetDrafts } from "../lib/asset-drafts.ts";
 import { explainIncompleteDecision, generateWeeklyDecisionReport } from "../lib/decision-memory.ts";
 import { LATEST_STORAGE_VERSION, STORAGE_BACKUP_PREFIX, STORAGE_KEY, loadStoredState, migrateStoredState } from "../lib/storage.ts";
-import { BRAIN_OPTIONS, OpenAIBrainProvider, RuleBrainProvider, createBrain } from "../lib/brain/index.ts";
+import { BRAIN_OPTIONS, ContextBuilder, OpenAIBrainProvider, PromptBuilder, RuleBrainProvider, createBrain, parseBrainOutput } from "../lib/brain/index.ts";
 
 async function render() {
   const html = await readFile(
@@ -104,7 +104,7 @@ test("generates deterministic decision guidance behind a replaceable interface",
 test("keeps the two decision paths and local choice in the page state", async () => {
   const page = await readFile(new URL("../app/page.tsx", import.meta.url), "utf8");
 
-  assert.match(page, /brain\.evaluate\(\{ goal: data\.goal, action: data\.action \}\)/);
+  assert.match(page, /brain\.evaluate\(brainInput\)/);
   assert.doesNotMatch(page, /decisionEngine/);
   assert.match(page, /Follow AI/);
   assert.match(page, /Keep My Plan/);
@@ -117,7 +117,7 @@ test("evaluates every provider through the same Brain interface", async () => {
   assert.deepEqual(BRAIN_OPTIONS.map((option) => option.label), ["Rules", "OpenAI", "Claude", "Gemini"]);
   for (const option of BRAIN_OPTIONS) {
     const brain = createBrain(option.id);
-    const output = await brain.evaluate({ goal: "获得 100 位客户", action: "研究客户需求" });
+    const output = await brain.evaluate(makeBrainInput(option.id));
     assert.ok(["Execute", "Refine", "Reject Today"].includes(output.outcome));
     assert.equal(typeof output.score, "number");
     assert.ok(output.reasoning.score.length);
@@ -126,13 +126,58 @@ test("evaluates every provider through the same Brain interface", async () => {
 });
 
 test("keeps rules deterministic and OpenAI mocked without an API call", async () => {
-  const input = { goal: "发布产品", action: "完成用户测试" };
+  const input = makeBrainInput("rules", "发布产品", "完成用户测试");
   const rules = new RuleBrainProvider();
   assert.deepEqual(await rules.evaluate(input), await rules.evaluate(input));
 
-  const openai = await new OpenAIBrainProvider().evaluate(input);
+  const openai = await new OpenAIBrainProvider().evaluate(makeBrainInput("openai", "发布产品", "完成用户测试"));
   assert.match(openai.whyToday, /OpenAI mock/);
   assert.match(openai.reasoning.score.join(" "), /尚未调用外部模型 API/);
+});
+
+test("builds bounded provider context from goals, decisions, assets, and reviews", () => {
+  const context = new ContextBuilder(2).build({
+    yearlyGoal: " 100 位客户 ", todayAction: " 完成访谈 ", selectedProvider: "openai",
+    decisionHistory: [{ id: 1 }, { id: 2 }, { id: 3 }],
+    assets: [{ id: "a" }, { id: "b" }, { id: "c" }],
+    reviews: [{ id: "r1" }],
+  });
+  assert.equal(context.yearlyGoal, "100 位客户");
+  assert.equal(context.todayAction, "完成访谈");
+  assert.equal(context.recentDecisionHistory.length, 2);
+  assert.equal(context.recentAssets.length, 2);
+  assert.equal(context.recentReviews.length, 1);
+  assert.equal(context.selectedProvider, "openai");
+});
+
+test("keeps separate prompt templates for all four Brain tasks", () => {
+  const builder = new PromptBuilder();
+  const context = makeBrainInput("rules").context;
+  for (const task of ["decision", "multiplier", "asset", "review"]) {
+    const prompt = builder.build(task, context);
+    assert.match(prompt, new RegExp(`TASK: ${task.toUpperCase()}`));
+    assert.match(prompt, /Return JSON only/);
+    assert.match(prompt, /yearlyGoal/);
+  }
+});
+
+test("enforces one structured JSON output schema for provider responses", async () => {
+  const trace = await createBrain("claude").inspect(makeBrainInput("claude"));
+  assert.deepEqual(parseBrainOutput(trace.rawResponse), trace.parsedOutput);
+  assert.throws(() => parseBrainOutput('{"outcome":"Execute"}'), /missing required fields/);
+  assert.throws(() => parseBrainOutput('{broken'), SyntaxError);
+});
+
+test("includes a development-only Prompt Playground trace without production markup", async () => {
+  const page = await readFile(new URL("../app/page.tsx", import.meta.url), "utf8");
+  const response = await render();
+  const html = await response.text();
+  assert.match(page, /process\.env\.NODE_ENV !== "production"/);
+  assert.match(page, /Generated Context/);
+  assert.match(page, /Generated Prompt/);
+  assert.match(page, /Raw Provider Response/);
+  assert.match(page, /Parsed Output/);
+  assert.doesNotMatch(html, /Prompt Playground/);
 });
 
 test("explains its reasoning and explicitly rejects scores below a configurable threshold", () => {
@@ -280,4 +325,11 @@ class MemoryStorage {
   setItem(key, value) {
     this.#values.set(key, String(value));
   }
+}
+
+function makeBrainInput(selectedProvider = "rules", yearlyGoal = "获得 100 位客户", todayAction = "研究客户需求") {
+  return {
+    task: "decision",
+    context: { yearlyGoal, todayAction, recentDecisionHistory: [], recentAssets: [], recentReviews: [], selectedProvider },
+  };
 }

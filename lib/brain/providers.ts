@@ -1,5 +1,9 @@
 import { decisionEngine, type DecisionEngineOptions } from "../decision-engine.ts";
-import type { Brain, BrainInput, BrainOutput } from "./types.ts";
+import { PromptBuilder } from "./prompt-builder.ts";
+import { parseBrainOutput } from "./schema.ts";
+import type { Brain, BrainInput, BrainOutput, BrainTrace } from "./types.ts";
+
+const promptBuilder = new PromptBuilder();
 
 export class RuleBrainProvider implements Brain {
   readonly #options: DecisionEngineOptions;
@@ -9,30 +13,42 @@ export class RuleBrainProvider implements Brain {
   }
 
   async evaluate(input: BrainInput): Promise<BrainOutput> {
-    return decisionEngine(input.goal, input.action, this.#options);
+    return (await this.inspect(input)).parsedOutput;
+  }
+
+  async inspect(input: BrainInput): Promise<BrainTrace> {
+    const output = decisionEngine(input.context.yearlyGoal, input.context.todayAction, this.#options);
+    return createTrace(input, output);
   }
 }
 
 export class OpenAIBrainProvider implements Brain {
-  async evaluate(input: BrainInput): Promise<BrainOutput> {
-    return mockModelResponse("OpenAI", input);
-  }
+  async evaluate(input: BrainInput): Promise<BrainOutput> { return (await this.inspect(input)).parsedOutput; }
+  async inspect(input: BrainInput): Promise<BrainTrace> { return createTrace(input, mockModelOutput("OpenAI", input)); }
 }
 
 export class ClaudeBrainProvider implements Brain {
-  async evaluate(input: BrainInput): Promise<BrainOutput> {
-    return mockModelResponse("Claude", input);
-  }
+  async evaluate(input: BrainInput): Promise<BrainOutput> { return (await this.inspect(input)).parsedOutput; }
+  async inspect(input: BrainInput): Promise<BrainTrace> { return createTrace(input, mockModelOutput("Claude", input)); }
 }
 
 export class GeminiBrainProvider implements Brain {
-  async evaluate(input: BrainInput): Promise<BrainOutput> {
-    return mockModelResponse("Gemini", input);
-  }
+  async evaluate(input: BrainInput): Promise<BrainOutput> { return (await this.inspect(input)).parsedOutput; }
+  async inspect(input: BrainInput): Promise<BrainTrace> { return createTrace(input, mockModelOutput("Gemini", input)); }
 }
 
-function mockModelResponse(provider: string, input: BrainInput): BrainOutput {
-  const action = input.action.trim() || "当前行动";
+function createTrace(input: BrainInput, output: BrainOutput): BrainTrace {
+  const rawResponse = JSON.stringify(output);
+  return {
+    context: input.context,
+    prompt: promptBuilder.build(input.task, input.context),
+    rawResponse,
+    parsedOutput: parseBrainOutput(rawResponse),
+  };
+}
+
+function mockModelOutput(provider: string, input: BrainInput): BrainOutput {
+  const action = input.context.todayAction.trim() || "当前行动";
   return {
     outcome: "Refine",
     score: 72,
