@@ -2,7 +2,8 @@
 
 import { useEffect, useMemo, useState } from "react";
 import { decisionEngine } from "@/lib/decision-engine";
-import { generateWeeklyDecisionReport, type DecisionChoice, type DecisionHistoryEntry, type WeeklyDecisionReport } from "@/lib/decision-memory";
+import { generateAssetDrafts, type AssetDraft } from "@/lib/asset-drafts";
+import { explainIncompleteDecision, generateWeeklyDecisionReport, type DecisionChoice, type DecisionHistoryEntry, type WeeklyDecisionReport } from "@/lib/decision-memory";
 
 type Review = {
   date: string;
@@ -30,6 +31,8 @@ type State = {
   aiChoice: AiChoice;
   decisionHistory: DecisionHistoryEntry[];
   activeDecisionId: string | null;
+  assetDrafts: AssetDraft[];
+  completionResult: "completed" | "partial" | "failed" | null;
 };
 
 const initialState: State = {
@@ -46,6 +49,8 @@ const initialState: State = {
   aiChoice: null,
   decisionHistory: [],
   activeDecisionId: null,
+  assetDrafts: [],
+  completionResult: null,
 };
 
 const STORAGE_KEY = "leverage-os-v1";
@@ -75,6 +80,8 @@ export default function Home() {
   const [view, setView] = useState<View>("today");
   const [selectedAsset, setSelectedAsset] = useState<string | null>(null);
   const [selectedReview, setSelectedReview] = useState<number | null>(null);
+  const [previewDraftId, setPreviewDraftId] = useState<string | null>(null);
+  const [editingDraftId, setEditingDraftId] = useState<string | null>(null);
 
   useEffect(() => {
     try {
@@ -103,9 +110,9 @@ export default function Home() {
   const update = (patch: Partial<State>) => setData((current) => ({ ...current, ...patch }));
 
   function goToStep(nextStep: number) {
-    if (nextStep === 5 && data.assets.length !== 4) {
+    if (nextStep === 5 && data.assetDrafts.length !== 4) {
       const assets = suggestAssets(data.action);
-      update({ assets, selectedAssets: [assets[0]] });
+      update({ assets, assetDrafts: generateAssetDrafts(data.goal, data.action) });
     }
     setStep(nextStep);
   }
@@ -127,6 +134,7 @@ export default function Home() {
       aiRecommendation: judgment.recommendation,
       userChoice: choice,
       completionStatus: "pending",
+      outcome: judgment.outcome,
       score: judgment.score,
       risk: judgment.biggestRisk,
       biggestWaste: "",
@@ -138,13 +146,28 @@ export default function Home() {
     goToStep(4);
   }
 
-  function saveReview() {
+  function updateAssetDraft(id: string, patch: Partial<AssetDraft>) {
+    update({ assetDrafts: data.assetDrafts.map((draft) => draft.id === id ? { ...draft, ...patch } : draft) });
+  }
+
+  function saveAssetDraft(id: string) {
+    const draft = data.assetDrafts.find((item) => item.id === id);
+    if (!draft) return;
+    update({
+      assetDrafts: data.assetDrafts.map((item) => item.id === id ? { ...item, status: "saved" } : item),
+      selectedAssets: data.selectedAssets.includes(draft.title) ? data.selectedAssets : [...data.selectedAssets, draft.title],
+    });
+    setEditingDraftId(null);
+  }
+
+  function saveReview(completionStatus: "completed" | "partial" | "failed") {
     if (!data.biggestWaste.trim() || !data.bestAsset.trim() || !data.tomorrowFocus.trim()) return;
     const review = { date: new Date().toISOString(), action: data.action, biggestWaste: data.biggestWaste, bestAsset: data.bestAsset, tomorrowFocus: data.tomorrowFocus, multiplier: data.multiplier };
+    const incomplete = completionStatus === "completed" ? null : explainIncompleteDecision(completionStatus, data.action, data.biggestWaste, judgment.biggestRisk);
     const decisionHistory = data.decisionHistory.map((entry) => entry.id === data.activeDecisionId
-      ? { ...entry, completionStatus: "completed" as const, biggestWaste: data.biggestWaste }
+      ? { ...entry, completionStatus, biggestWaste: data.biggestWaste, aiExplanation: incomplete?.explanation, tomorrowRecommendation: incomplete?.tomorrowRecommendation }
       : entry);
-    update({ reviews: [review, ...data.reviews], decisionHistory, completed: true });
+    update({ reviews: [review, ...data.reviews], decisionHistory, completionResult: completionStatus, completed: true });
   }
 
   const canContinue = step === 1 ? data.goal.trim().length > 8 : step === 2 ? data.action.trim().length > 5 : true;
@@ -261,9 +284,10 @@ export default function Home() {
               <h2>完成之后，你要留下什么？</h2>
               <p className="lead">好的工作会消失，除非你把它变成资产。选择今天要保存的成果。</p>
               <div className="asset-grid">
-                {data.assets.map((asset, i) => { const selected = data.selectedAssets.includes(asset); return <button key={asset} aria-pressed={selected} className={selected ? "asset selected" : "asset"} onClick={() => update({ selectedAssets: selected ? data.selectedAssets.filter((x) => x !== asset) : [...data.selectedAssets, asset] })}><span>{["▤", "◇", "◎", "◆"][i]}</span><div><strong>{asset}</strong><small>{selected ? "已选择 · 将保存为今日资产" : "AI 建议 · 点击选择"}</small></div><i>{selected ? "✓" : "+"}</i></button>; })}
+                {data.assetDrafts.map((draft, i) => <article key={draft.id} className={draft.status === "saved" ? "asset selected" : "asset"}><span>{["▤", "◇", "◎", "◆"][i]}</span><div><strong>{draft.type}</strong><small>{draft.title}</small><div className="asset-actions"><button onClick={() => { setPreviewDraftId(draft.id); setEditingDraftId(null); }}>Preview</button><button onClick={() => { setPreviewDraftId(draft.id); setEditingDraftId(draft.id); }}>Edit</button><button onClick={() => saveAssetDraft(draft.id)}>{draft.status === "saved" ? "Saved ✓" : "Save"}</button></div></div></article>)}
               </div>
-              <p className="selection-status">已选择 {data.selectedAssets.length} 项资产</p>
+              {previewDraftId && data.assetDrafts.find((draft) => draft.id === previewDraftId) && (() => { const draft = data.assetDrafts.find((item) => item.id === previewDraftId)!; return <div className="asset-preview"><small>{draft.type} DRAFT</small><h3>{draft.title}</h3>{editingDraftId === draft.id ? <textarea value={draft.content} onChange={(event) => updateAssetDraft(draft.id, { content: event.target.value, status: "draft" })} /> : <p>{draft.content}</p>}<button className="detail-back" onClick={() => { setPreviewDraftId(null); setEditingDraftId(null); }}>关闭</button></div>; })()}
+              <p className="selection-status">已保存 {data.assetDrafts.filter((draft) => draft.status === "saved").length} 项资产</p>
               <div className="multiplier-note"><span>今日乘数</span>{data.multiplier}</div>
             </>}
 
@@ -271,9 +295,10 @@ export default function Home() {
               <p className="kicker">06 · DAILY REVIEW</p>
               <h2>{data.completed ? "今天的复利已经开始。" : "用三个答案，结束今天。"}</h2>
               {data.completed ? <div className="completion">
-                <div className="completion-mark">✓</div><h3>Daily review saved</h3><p>你完成了今天的最高杠杆行动，并留下 {data.selectedAssets.length} 项可复用资产。</p>
+                <div className="completion-mark">{data.completionResult === "completed" ? "✓" : data.completionResult === "partial" ? "◐" : "×"}</div><h3>Daily review saved</h3><p>结果：{completionLabel(data.completionResult)}。你留下了 {data.selectedAssets.length} 项可复用资产。</p>
                 <div className="summary-row"><span>行动</span><strong>{data.action}</strong></div><div className="summary-row"><span>乘数</span><strong>{data.multiplier}</strong></div>
-                <button className="secondary" onClick={() => { update({ action: "", multiplier: "", completed: false, assets: [], selectedAssets: [], biggestWaste: "", bestAsset: "", tomorrowFocus: "", aiChoice: null, activeDecisionId: null }); setStep(2); }}>开始新的一天 →</button>
+                {data.completionResult !== "completed" && data.activeDecisionId && (() => { const entry = data.decisionHistory.find((item) => item.id === data.activeDecisionId); return entry ? <div className="incomplete-guidance"><strong>AI explanation</strong><p>{entry.aiExplanation}</p><strong>Tomorrow&apos;s recommendation</strong><p>{entry.tomorrowRecommendation}</p></div> : null; })()}
+                <button className="secondary" onClick={() => { update({ action: "", multiplier: "", completed: false, assets: [], selectedAssets: [], biggestWaste: "", bestAsset: "", tomorrowFocus: "", aiChoice: null, activeDecisionId: null, assetDrafts: [], completionResult: null }); setStep(2); }}>开始新的一天 →</button>
               </div> : <div className="review-form">
                 <label><span>Biggest Waste</span><strong>今天最大的浪费是什么？</strong><textarea value={data.biggestWaste} onChange={(e) => update({ biggestWaste: e.target.value })} placeholder="以后可以删除、委派或自动化什么？" /></label>
                 <label><span>Best Asset Created</span><strong>今天留下的最佳资产是什么？</strong><textarea value={data.bestAsset} onChange={(e) => update({ bestAsset: e.target.value })} placeholder="SOP、Prompt、案例或决策原则…" /></label>
@@ -283,7 +308,7 @@ export default function Home() {
 
             {!data.completed && <div className="actions">
               {step > 1 && <button className="back" onClick={() => setStep(step - 1)}>← 返回</button>}
-              {step === 3 ? <><button className="secondary" onClick={() => chooseAiPath("keep-plan")}>Keep My Plan</button><button className="primary" onClick={() => chooseAiPath("follow-ai")}>Follow AI<span>→</span></button></> : <button className="primary" disabled={!canContinue || (step === 5 && data.selectedAssets.length === 0) || (step === 6 && (!data.biggestWaste.trim() || !data.bestAsset.trim() || !data.tomorrowFocus.trim()))} onClick={step === 6 ? saveReview : next}>{step === 6 ? "保存并完成" : step === 5 ? "保存资产并继续" : "继续"}<span>→</span></button>}
+              {step === 3 ? <><button className="secondary" onClick={() => chooseAiPath("keep-plan")}>Keep My Plan</button><button className="primary" onClick={() => chooseAiPath("follow-ai")}>Follow AI<span>→</span></button></> : step === 6 ? <div className="completion-actions"><button disabled={!data.biggestWaste.trim() || !data.bestAsset.trim() || !data.tomorrowFocus.trim()} onClick={() => saveReview("failed")}>Failed</button><button disabled={!data.biggestWaste.trim() || !data.bestAsset.trim() || !data.tomorrowFocus.trim()} onClick={() => saveReview("partial")}>Partial</button><button className="primary" disabled={!data.biggestWaste.trim() || !data.bestAsset.trim() || !data.tomorrowFocus.trim()} onClick={() => saveReview("completed")}>Completed<span>→</span></button></div> : <button className="primary" disabled={!canContinue || (step === 5 && data.assetDrafts.every((draft) => draft.status !== "saved"))} onClick={next}>{step === 5 ? "保存资产并继续" : "继续"}<span>→</span></button>}
             </div>}
           </div>
           </>}
@@ -296,6 +321,13 @@ export default function Home() {
 function formatReviewDate(date: string) {
   const parsed = new Date(date);
   return Number.isNaN(parsed.getTime()) ? date : parsed.toISOString().slice(0, 10);
+}
+
+function completionLabel(status: State["completionResult"]) {
+  if (status === "completed") return "Completed";
+  if (status === "partial") return "Partial";
+  if (status === "failed") return "Failed";
+  return "Pending";
 }
 
 function LibraryView({ title, kicker, empty, onBack, children }: { title: string; kicker: string; empty: string; onBack: () => void; children: React.ReactNode }) {
@@ -328,11 +360,12 @@ function WeeklyReportView({ report, onBack }: { report: WeeklyDecisionReport; on
     <button className="library-back" onClick={onBack}>← 返回 Today</button>
     <p className="kicker">WEEKLY DECISION REPORT</p>
     <h2 id="weekly-report-title">本周，你是怎样做决定的？</h2>
-    <div className="report-rates"><div><strong>{report.followAiRate}%</strong><span>Follow AI rate</span></div><div><strong>{report.keepMyPlanRate}%</strong><span>Keep My Plan rate</span></div></div>
+    <div className="report-rates"><div><strong>{report.completionRate}%</strong><span>Completion rate</span></div><div><strong>{report.aiAdoptionRate}%</strong><span>AI adoption rate</span></div><div><strong>{report.decisionAccuracy}%</strong><span>Decision accuracy</span></div></div>
     <div className="report-grid">
-      <ReportCard label="HIGHEST LEVERAGE" title="最高杠杆决定"><ol>{report.highestLeverageDecisions.length ? report.highestLeverageDecisions.map((entry) => <li key={entry.id}><strong>{entry.score}</strong><span>{entry.chosenAction}</span></li>) : <li>暂无决策记录</li>}</ol></ReportCard>
+      <ReportCard label="HIGHEST LEVERAGE WINS" title="最高杠杆胜利"><ol>{report.highestLeverageWins.length ? report.highestLeverageWins.map((entry) => <li key={entry.id}><strong>{entry.score}</strong><span>{entry.chosenAction}</span></li>) : <li>暂无已完成的决定</li>}</ol></ReportCard>
       <ReportCard label="MOST COMMON WASTE" title="最常见的浪费"><p>{report.mostCommonWaste}</p></ReportCard>
       <ReportCard label="REPEATED RISKS" title="反复出现的风险"><ul>{report.repeatedRisks.length ? report.repeatedRisks.map((risk) => <li key={risk}>{risk}</li>) : <li>本周暂未发现重复风险</li>}</ul></ReportCard>
+      <ReportCard label="REPEATED FAILURES" title="反复失败"><ul>{report.repeatedFailures.length ? report.repeatedFailures.map((failure) => <li key={failure}>{failure}</li>) : <li>本周暂未发现重复失败</li>}</ul></ReportCard>
       <ReportCard label="NEXT WEEK" title="下周唯一建议"><p>{report.recommendation}</p></ReportCard>
     </div>
   </section>;

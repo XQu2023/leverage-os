@@ -2,7 +2,8 @@ import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import test from "node:test";
 import { decisionEngine } from "../lib/decision-engine.ts";
-import { generateWeeklyDecisionReport } from "../lib/decision-memory.ts";
+import { generateAssetDrafts } from "../lib/asset-drafts.ts";
+import { explainIncompleteDecision, generateWeeklyDecisionReport } from "../lib/decision-memory.ts";
 
 async function render() {
   const html = await readFile(
@@ -42,15 +43,16 @@ test("keeps device-dependent values out of the initial render", async () => {
   assert.doesNotMatch(page, /useState\([^\n]*(?:new Date|Date\.now|Math\.random|toLocale)/);
 });
 
-test("implements Leave Behind with selectable AI asset suggestions", async () => {
+test("implements Leave Behind with editable AI asset drafts", async () => {
   const page = await readFile(new URL("../app/page.tsx", import.meta.url), "utf8");
+  const drafts = generateAssetDrafts("获得 100 位客户", "完成 3 次客户访谈");
 
   assert.match(page, /05 · LEAVE BEHIND/);
-  assert.match(page, /客户跟进 SOP/);
-  assert.match(page, /客户访谈 Prompt/);
-  assert.match(page, /客户案例/);
-  assert.match(page, /客户决策原则/);
-  assert.match(page, /aria-pressed=\{selected\}/);
+  assert.deepEqual(drafts.map((draft) => draft.type), ["SOP", "Prompt", "Customer Insight", "Decision Principle"]);
+  assert.ok(drafts.every((draft) => draft.content.includes("完成 3 次客户访谈")));
+  assert.match(page, /Preview/);
+  assert.match(page, /Edit/);
+  assert.match(page, /Saved ✓/);
   assert.match(page, /保存资产并继续/);
 });
 
@@ -63,7 +65,9 @@ test("implements Daily Review with all three saved prompts", async () => {
   assert.match(page, /biggestWaste: data\.biggestWaste/);
   assert.match(page, /bestAsset: data\.bestAsset/);
   assert.match(page, /tomorrowFocus: data\.tomorrowFocus/);
-  assert.match(page, /保存并完成/);
+  assert.match(page, /Completed/);
+  assert.match(page, /Partial/);
+  assert.match(page, /Failed/);
 });
 
 test("links sidebar summaries to accessible asset and review libraries", async () => {
@@ -109,7 +113,8 @@ test("keeps the two decision paths and local choice in the page state", async ()
 test("explains its reasoning and explicitly rejects scores below a configurable threshold", () => {
   const decision = decisionEngine("建立一家成功的公司", "研究和规划", { rejectionThreshold: 70 });
 
-  assert.equal(decision.verdict, "Do not do this today");
+  assert.equal(decision.outcome, "Reject Today");
+  assert.equal(decision.verdict, "Reject Today");
   assert.equal(decision.recommendation, "Do not do this today");
   assert.match(decision.reasoning.recommendation, /低于可配置阈值 70/);
   assert.ok(decision.reasoning.score.length >= 4);
@@ -118,13 +123,17 @@ test("explains its reasoning and explicitly rejects scores below a configurable 
 
 test("builds a seven-day decision report from local history", () => {
   const report = generateWeeklyDecisionReport([
-    { id: "1", date: "2026-08-05T09:00:00.000Z", yearlyGoal: "100 位客户", chosenAction: "完成访谈", aiRecommendation: "完成访谈", userChoice: "follow-ai", completionStatus: "completed", score: 90, risk: "缺少记录", biggestWaste: "会议" },
-    { id: "2", date: "2026-08-04T09:00:00.000Z", yearlyGoal: "100 位客户", chosenAction: "联系客户", aiRecommendation: "联系客户", userChoice: "keep-plan", completionStatus: "completed", score: 82, risk: "缺少记录", biggestWaste: "会议" },
+    { id: "1", date: "2026-08-05T09:00:00.000Z", yearlyGoal: "100 位客户", chosenAction: "完成访谈", aiRecommendation: "完成访谈", userChoice: "follow-ai", outcome: "Execute", completionStatus: "completed", score: 90, risk: "缺少记录", biggestWaste: "会议" },
+    { id: "2", date: "2026-08-04T09:00:00.000Z", yearlyGoal: "100 位客户", chosenAction: "联系客户", aiRecommendation: "联系客户", userChoice: "keep-plan", outcome: "Refine", completionStatus: "partial", score: 82, risk: "缺少记录", biggestWaste: "会议" },
   ], new Date("2026-08-06T12:00:00.000Z"));
 
   assert.equal(report.followAiRate, 50);
   assert.equal(report.keepMyPlanRate, 50);
   assert.equal(report.highestLeverageDecisions[0].score, 90);
+  assert.equal(report.completionRate, 50);
+  assert.equal(report.aiAdoptionRate, 50);
+  assert.equal(report.decisionAccuracy, 100);
+  assert.equal(report.highestLeverageWins[0].chosenAction, "完成访谈");
   assert.equal(report.mostCommonWaste, "会议");
   assert.deepEqual(report.repeatedRisks, ["缺少记录"]);
   assert.match(report.recommendation, /缺少记录/);
@@ -137,9 +146,21 @@ test("persists decision memory and exposes the weekly report", async () => {
   assert.match(page, /decisionHistory/);
   assert.match(page, /completionStatus: "pending"/);
   assert.match(page, /completionStatus: "completed"/);
+  assert.match(page, /outcome: judgment\.outcome/);
   assert.match(page, /WEEKLY DECISION REPORT/);
-  assert.match(page, /Follow AI rate/);
-  assert.match(page, /Keep My Plan rate/);
+  assert.match(page, /Completion rate/);
+  assert.match(page, /AI adoption rate/);
+  assert.match(page, /Decision accuracy/);
+});
+
+test("explains incomplete work and recommends a smaller next-day action", () => {
+  const partial = explainIncompleteDecision("partial", "发布产品", "范围过大", "无法验证");
+  const failed = explainIncompleteDecision("failed", "发布产品", "范围过大", "无法验证");
+
+  assert.match(partial.explanation, /部分进展/);
+  assert.match(partial.tomorrowRecommendation, /60 分钟/);
+  assert.match(failed.explanation, /没有形成/);
+  assert.match(failed.tomorrowRecommendation, /不要原样重试/);
 });
 
 test("keeps the mobile daily flow compact and its primary action visible", async () => {

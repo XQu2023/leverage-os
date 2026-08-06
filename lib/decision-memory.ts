@@ -7,10 +7,13 @@ export type DecisionHistoryEntry = {
   chosenAction: string;
   aiRecommendation: string;
   userChoice: DecisionChoice;
-  completionStatus: "pending" | "completed";
+  outcome: "Execute" | "Refine" | "Reject Today";
+  completionStatus: "pending" | "completed" | "partial" | "failed";
   score: number;
   risk: string;
   biggestWaste: string;
+  aiExplanation?: string;
+  tomorrowRecommendation?: string;
 };
 
 export type WeeklyDecisionReport = {
@@ -20,6 +23,11 @@ export type WeeklyDecisionReport = {
   highestLeverageDecisions: DecisionHistoryEntry[];
   mostCommonWaste: string;
   repeatedRisks: string[];
+  completionRate: number;
+  aiAdoptionRate: number;
+  decisionAccuracy: number;
+  highestLeverageWins: DecisionHistoryEntry[];
+  repeatedFailures: string[];
   recommendation: string;
 };
 
@@ -36,6 +44,7 @@ export function generateWeeklyDecisionReport(
   });
   const total = recent.length;
   const followCount = recent.filter((entry) => entry.userChoice === "follow-ai").length;
+  const completedCount = recent.filter((entry) => entry.completionStatus === "completed").length;
   const wastes = countValues(recent.map((entry) => entry.biggestWaste).filter(Boolean));
   const risks = countValues(recent.map((entry) => entry.risk).filter(Boolean));
   const repeatedRisks = [...risks.entries()]
@@ -44,6 +53,22 @@ export function generateWeeklyDecisionReport(
     .map(([risk]) => risk);
   const mostCommonWaste = [...wastes.entries()].sort((a, b) => b[1] - a[1])[0]?.[0] ?? "暂无足够回顾数据";
   const highestLeverageDecisions = [...recent].sort((a, b) => b.score - a.score).slice(0, 3);
+  const highestLeverageWins = recent
+    .filter((entry) => entry.completionStatus === "completed")
+    .sort((a, b) => b.score - a.score)
+    .slice(0, 3);
+  const failed = recent.filter((entry) => entry.completionStatus === "partial" || entry.completionStatus === "failed");
+  const failureCounts = countValues(failed.map((entry) => entry.biggestWaste || entry.risk).filter(Boolean));
+  const repeatedFailures = [...failureCounts.entries()]
+    .filter(([, count]) => count > 1)
+    .sort((a, b) => b[1] - a[1])
+    .map(([failure]) => failure);
+  const accurateCount = recent.filter((entry) => {
+    const outcome = entry.outcome ?? "Refine";
+    if (outcome === "Execute") return entry.completionStatus === "completed";
+    if (outcome === "Refine") return entry.completionStatus === "completed" || entry.completionStatus === "partial";
+    return entry.userChoice === "follow-ai" || entry.completionStatus === "failed";
+  }).length;
   const keepRate = total ? Math.round(((total - followCount) / total) * 100) : 0;
   const followRate = total ? 100 - keepRate : 0;
 
@@ -62,8 +87,31 @@ export function generateWeeklyDecisionReport(
     highestLeverageDecisions,
     mostCommonWaste,
     repeatedRisks,
+    completionRate: total ? Math.round((completedCount / total) * 100) : 0,
+    aiAdoptionRate: followRate,
+    decisionAccuracy: total ? Math.round((accurateCount / total) * 100) : 0,
+    highestLeverageWins,
+    repeatedFailures,
     recommendation,
   };
+}
+
+export function explainIncompleteDecision(
+  status: "partial" | "failed",
+  action: string,
+  biggestWaste: string,
+  risk: string,
+): { explanation: string; tomorrowRecommendation: string } {
+  const blocker = biggestWaste.trim() || risk;
+  return status === "partial"
+    ? {
+        explanation: `行动“${action}”取得了部分进展，但“${blocker}”阻止了完整交付。`,
+        tomorrowRecommendation: "保留已经完成的部分，把剩余工作收窄为一个可在 60 分钟内验证的交付物。",
+      }
+    : {
+        explanation: `行动“${action}”没有形成计划中的可验证结果，主要阻力是“${blocker}”。`,
+        tomorrowRecommendation: "不要原样重试。先移除主要阻力，再选择一个更小、能产生外部证据的行动。",
+      };
 }
 
 function countValues(values: string[]): Map<string, number> {

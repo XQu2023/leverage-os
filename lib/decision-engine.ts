@@ -7,6 +7,7 @@ export type DecisionReasoning = {
 };
 
 export type DecisionResult = {
+  outcome: "Execute" | "Refine" | "Reject Today";
   score: number;
   verdict: string;
   recommendation: string;
@@ -85,16 +86,14 @@ export function decisionEngine(
   }
 
   const rejected = score < rejectionThreshold;
+  const outcome: DecisionResult["outcome"] = rejected ? "Reject Today" : score >= 78 && concrete && !vague ? "Execute" : "Refine";
   const recommendation = rejected
     ? "Do not do this today"
     : higherLeverageAlternative ?? normalizedAction;
-  const verdict = rejected
-    ? "Do not do this today"
-    : score >= 78
-      ? "高杠杆行动"
-      : "方向正确，需要收窄";
+  const verdict = outcome;
 
   return {
+    outcome,
     score,
     verdict,
     recommendation,
