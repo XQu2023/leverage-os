@@ -13,6 +13,9 @@ type Review = {
   bestAsset: string;
   tomorrowFocus: string;
   multiplier: string;
+  predictionResult: "happened" | "partial" | "did-not-happen";
+  wrongAssumption: string;
+  nextTimeChange: string;
 };
 
 type View = "today" | "assets" | "reviews" | "weekly";
@@ -41,6 +44,9 @@ type State = {
   completionResult: "completed" | "partial" | "failed" | null;
   brainProvider: BrainMode;
   brainUsage: BrainUsage;
+  predictionResult: "happened" | "partial" | "did-not-happen" | null;
+  wrongAssumption: string;
+  nextTimeChange: string;
 };
 
 const initialState: State = {
@@ -62,6 +68,9 @@ const initialState: State = {
   completionResult: null,
   brainProvider: "auto",
   brainUsage: emptyBrainUsage,
+  predictionResult: null,
+  wrongAssumption: "",
+  nextTimeChange: "",
 };
 
 function suggestMultiplier(action: string) {
@@ -186,6 +195,15 @@ export default function Home() {
       latencyMs: judgment.metadata.latencyMs,
       tokenUsage: judgment.metadata.tokenUsage,
       fallback: judgment.metadata.fallback,
+      ledger: {
+        decision: action,
+        prediction: judgment.todayDeliverable,
+        outcome: "pending",
+        confidence: judgment.confidence,
+        lesson: "",
+        wrongAssumption: "",
+        nextTimeChange: "",
+      },
     };
     const decisionHistory = data.activeDecisionId
       ? data.decisionHistory.map((item) => item.id === id ? entry : item)
@@ -209,16 +227,17 @@ export default function Home() {
   }
 
   function saveReview(completionStatus: "completed" | "partial" | "failed") {
-    if (!data.biggestWaste.trim() || !data.bestAsset.trim() || !data.tomorrowFocus.trim()) return;
-    const review = { date: new Date().toISOString(), action: data.action, biggestWaste: data.biggestWaste, bestAsset: data.bestAsset, tomorrowFocus: data.tomorrowFocus, multiplier: data.multiplier };
+    if (!canSaveReview) return;
+    const review = { date: new Date().toISOString(), action: data.action, biggestWaste: data.biggestWaste, bestAsset: data.bestAsset, tomorrowFocus: data.tomorrowFocus, multiplier: data.multiplier, predictionResult: data.predictionResult!, wrongAssumption: data.wrongAssumption, nextTimeChange: data.nextTimeChange };
     const incomplete = completionStatus === "completed" ? null : explainIncompleteDecision(completionStatus, data.action, data.biggestWaste, judgment?.biggestRisk ?? "完成标准未被验证");
     const decisionHistory = data.decisionHistory.map((entry) => entry.id === data.activeDecisionId
-      ? { ...entry, completionStatus, biggestWaste: data.biggestWaste, aiExplanation: incomplete?.explanation, tomorrowRecommendation: incomplete?.tomorrowRecommendation }
+      ? { ...entry, completionStatus, biggestWaste: data.biggestWaste, aiExplanation: incomplete?.explanation, tomorrowRecommendation: incomplete?.tomorrowRecommendation, ledger: { ...entry.ledger, outcome: data.predictionResult!, wrongAssumption: data.wrongAssumption, nextTimeChange: data.nextTimeChange, lesson: `错误假设：${data.wrongAssumption}；下次改变：${data.nextTimeChange}` } }
       : entry);
     update({ reviews: [review, ...data.reviews], decisionHistory, completionResult: completionStatus, completed: true });
   }
 
   const canContinue = step === 1 ? data.goal.trim().length > 8 : step === 2 ? data.action.trim().length > 5 : true;
+  const canSaveReview = Boolean(data.biggestWaste.trim() && data.bestAsset.trim() && data.tomorrowFocus.trim() && data.predictionResult && data.wrongAssumption.trim() && data.nextTimeChange.trim());
   const openToday = () => {
     setView("today");
     setSelectedAsset(null);
@@ -320,7 +339,7 @@ export default function Home() {
                 <div><span className="verdict">{judgment.verdict}</span><h3>{data.action}</h3><p>{judgment.whyToday}</p></div>
               </div>
               <div className="criteria"><div><span>!</span><p><strong>最大风险</strong><br />{judgment.biggestRisk}</p></div><div><span>↑</span><p><strong>更高杠杆选择</strong><br />{judgment.higherLeverageAlternative ?? "当前计划已经足够直接，建议保持。"}</p></div><div><span>✓</span><p><strong>今日交付物</strong><br />{judgment.todayDeliverable}</p></div></div>
-              <details className="decision-reasoning"><summary>Why?</summary><div><strong>评分依据</strong><ul>{judgment.reasoning.score.map((reason) => <li key={reason}>{reason}</li>)}</ul><strong>风险依据</strong><p>{judgment.reasoning.risk}</p><strong>建议依据</strong><p>{judgment.reasoning.recommendation}</p></div></details>
+              <details className="decision-reasoning"><summary>Why?</summary><div><strong>置信度</strong><p>{judgment.confidence}%</p><strong>评分依据</strong><ul>{judgment.reasoning.score.map((reason) => <li key={reason}>{reason}</li>)}</ul><strong>实验</strong><p>{judgment.experiment}</p><strong>机会成本</strong><p>{judgment.opportunityCost}</p><strong>反事实</strong><p>{judgment.counterfactual}</p><strong>风险依据</strong><p>{judgment.reasoning.risk}</p><strong>建议依据</strong><p>{judgment.reasoning.recommendation}</p></div></details>
               {compareMode && comparison && <ComparisonView rules={comparison.rules.parsedOutput} openai={comparison.openai.parsedOutput} />}
               {debugOpen && developerTrace && <BrainInspector trace={developerTrace} usage={data.brainUsage} />}
               </> : <div className="judgment-card brain-loading"><span className="verdict">Evaluating</span><p>Brain 正在生成判断…</p></div>}
@@ -348,22 +367,25 @@ export default function Home() {
 
             {step === 6 && <>
               <p className="kicker">06 · DAILY REVIEW</p>
-              <h2>{data.completed ? "今天的复利已经开始。" : "用三个答案，结束今天。"}</h2>
+              <h2>{data.completed ? "今天的复利已经开始。" : "用一次复盘，结束今天。"}</h2>
               {data.completed ? <div className="completion">
                 <div className="completion-mark">{data.completionResult === "completed" ? "✓" : data.completionResult === "partial" ? "◐" : "×"}</div><h3>Daily review saved</h3><p>结果：{completionLabel(data.completionResult)}。你留下了 {data.selectedAssets.length} 项可复用资产。</p>
                 <div className="summary-row"><span>行动</span><strong>{data.action}</strong></div><div className="summary-row"><span>乘数</span><strong>{data.multiplier}</strong></div>
                 {data.completionResult !== "completed" && data.activeDecisionId && (() => { const entry = data.decisionHistory.find((item) => item.id === data.activeDecisionId); return entry ? <div className="incomplete-guidance"><strong>AI explanation</strong><p>{entry.aiExplanation}</p><strong>Tomorrow&apos;s recommendation</strong><p>{entry.tomorrowRecommendation}</p></div> : null; })()}
-                <button className="secondary" onClick={() => { update({ action: "", multiplier: "", completed: false, assets: [], selectedAssets: [], biggestWaste: "", bestAsset: "", tomorrowFocus: "", aiChoice: null, activeDecisionId: null, assetDrafts: [], completionResult: null }); setStep(2); }}>开始新的一天 →</button>
+                <button className="secondary" onClick={() => { update({ action: "", multiplier: "", completed: false, assets: [], selectedAssets: [], biggestWaste: "", bestAsset: "", tomorrowFocus: "", predictionResult: null, wrongAssumption: "", nextTimeChange: "", aiChoice: null, activeDecisionId: null, assetDrafts: [], completionResult: null }); setStep(2); }}>开始新的一天 →</button>
               </div> : <div className="review-form">
                 <label><span>Biggest Waste</span><strong>今天最大的浪费是什么？</strong><textarea value={data.biggestWaste} onChange={(e) => update({ biggestWaste: e.target.value })} placeholder="以后可以删除、委派或自动化什么？" /></label>
                 <label><span>Best Asset Created</span><strong>今天留下的最佳资产是什么？</strong><textarea value={data.bestAsset} onChange={(e) => update({ bestAsset: e.target.value })} placeholder="SOP、Prompt、案例或决策原则…" /></label>
                 <label><span>Tomorrow&apos;s One Focus</span><strong>明天唯一的重点是什么？</strong><textarea value={data.tomorrowFocus} onChange={(e) => update({ tomorrowFocus: e.target.value })} placeholder="只写一个最值得推进的结果…" /></label>
+                <fieldset className="prediction-review"><legend>Did the prediction happen?</legend><div>{(["happened", "partial", "did-not-happen"] as const).map((result) => <button type="button" key={result} className={data.predictionResult === result ? "active" : ""} onClick={() => update({ predictionResult: result })}>{predictionResultLabel(result)}</button>)}</div></fieldset>
+                <label><span>Wrong Assumption</span><strong>哪个假设错了？</strong><textarea value={data.wrongAssumption} onChange={(e) => update({ wrongAssumption: e.target.value })} placeholder="写下事实推翻了哪个假设…" /></label>
+                <label><span>Next Time</span><strong>下次应该改变什么？</strong><textarea value={data.nextTimeChange} onChange={(e) => update({ nextTimeChange: e.target.value })} placeholder="记录一个具体的决策规则或行动变化…" /></label>
               </div>}
             </>}
 
             {!data.completed && <div className="actions">
               {step > 1 && <button className="back" onClick={() => setStep(step - 1)}>← 返回</button>}
-              {step === 3 ? <><button className="secondary" disabled={!judgment} onClick={() => chooseAiPath("keep-plan")}>Keep My Plan</button><button className="primary" disabled={!judgment} onClick={() => chooseAiPath("follow-ai")}>Follow AI<span>→</span></button></> : step === 6 ? <div className="completion-actions"><button disabled={!data.biggestWaste.trim() || !data.bestAsset.trim() || !data.tomorrowFocus.trim()} onClick={() => saveReview("failed")}>Failed</button><button disabled={!data.biggestWaste.trim() || !data.bestAsset.trim() || !data.tomorrowFocus.trim()} onClick={() => saveReview("partial")}>Partial</button><button className="primary" disabled={!data.biggestWaste.trim() || !data.bestAsset.trim() || !data.tomorrowFocus.trim()} onClick={() => saveReview("completed")}>Completed<span>→</span></button></div> : <button className="primary" disabled={!canContinue || (step === 5 && data.assetDrafts.every((draft) => draft.status !== "saved"))} onClick={next}>{step === 5 ? "保存资产并继续" : "继续"}<span>→</span></button>}
+              {step === 3 ? <><button className="secondary" disabled={!judgment} onClick={() => chooseAiPath("keep-plan")}>Keep My Plan</button><button className="primary" disabled={!judgment} onClick={() => chooseAiPath("follow-ai")}>Follow AI<span>→</span></button></> : step === 6 ? <div className="completion-actions"><button disabled={!canSaveReview} onClick={() => saveReview("failed")}>Failed</button><button disabled={!canSaveReview} onClick={() => saveReview("partial")}>Partial</button><button className="primary" disabled={!canSaveReview} onClick={() => saveReview("completed")}>Completed<span>→</span></button></div> : <button className="primary" disabled={!canContinue || (step === 5 && data.assetDrafts.every((draft) => draft.status !== "saved"))} onClick={next}>{step === 5 ? "保存资产并继续" : "继续"}<span>→</span></button>}
             </div>}
           </div>
           </>}
@@ -383,6 +405,12 @@ function completionLabel(status: State["completionResult"]) {
   if (status === "partial") return "Partial";
   if (status === "failed") return "Failed";
   return "Pending";
+}
+
+function predictionResultLabel(result: NonNullable<State["predictionResult"]>) {
+  if (result === "happened") return "Yes";
+  if (result === "partial") return "Partially";
+  return "No";
 }
 
 function BrainSelector({ value, onChange }: { value: BrainMode; onChange: (provider: BrainMode) => void }) {
@@ -453,6 +481,9 @@ function ReviewDetail({ review, onBack }: { review: Review; onBack: () => void }
     <span className="detail-label">Biggest Waste</span><p>{review.biggestWaste || "—"}</p>
     <span className="detail-label">Best Asset Created</span><p>{review.bestAsset || "—"}</p>
     <span className="detail-label">Tomorrow&apos;s One Focus</span><p>{review.tomorrowFocus || "—"}</p>
+    <span className="detail-label">Prediction Result</span><p>{predictionResultLabel(review.predictionResult)}</p>
+    <span className="detail-label">Wrong Assumption</span><p>{review.wrongAssumption || "—"}</p>
+    <span className="detail-label">Next Time</span><p>{review.nextTimeChange || "—"}</p>
   </DetailCard>;
 }
 

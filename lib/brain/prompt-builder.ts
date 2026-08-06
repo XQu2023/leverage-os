@@ -1,14 +1,14 @@
 import type { BrainContext, BrainTask } from "./types.ts";
 
 const TEMPLATE_INSTRUCTIONS: Record<BrainTask, string> = {
-  decision: "Evaluate today's action. Return Execute, Refine, or Reject Today with score, risk, recommendation, and one measurable deliverable.",
+  decision: "Evaluate today's action. Return Execute, Refine, or Reject Today with score, confidence, risk, recommendation, one measurable experiment and deliverable, opportunity cost, and counterfactual.",
   multiplier: "Find one mechanism that makes today's result reusable or compounding.",
   asset: "Create an editable asset draft grounded in today's action and recent assets.",
   review: "Explain the result, identify the main failure pattern, and recommend tomorrow's smallest verifiable action.",
 };
 
 export const PROMPT_VERSIONS: Record<BrainTask, string> = {
-  decision: "decision.v1",
+  decision: "decision.v2",
   multiplier: "multiplier.v1",
   asset: "asset.v1",
   review: "review.v1",

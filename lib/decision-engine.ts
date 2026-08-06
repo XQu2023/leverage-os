@@ -83,6 +83,14 @@ export function decisionEngine(
     ? "Do not do this today"
     : higherLeverageAlternative ?? normalizedAction;
   const verdict = outcome;
+  const confidence = Math.max(45, Math.min(95, score - (vague ? 15 : 3)));
+  const experiment = `在今天结束前完成：${todayDeliverable}`;
+  const opportunityCost = rejected
+    ? "继续投入会占用本可用于一个可验证行动的时间。"
+    : "选择这个行动意味着今天不会推进其他低确定性事项。";
+  const counterfactual = rejected
+    ? "如果今天不做，先定义可验证交付物，明天的执行质量会更高。"
+    : `如果今天不执行，最可能失去的是与“${normalizedAction}”相关的即时证据。`;
 
   return {
     outcome,
@@ -95,6 +103,10 @@ export function decisionEngine(
     biggestRisk,
     higherLeverageAlternative,
     todayDeliverable,
+    confidence,
+    experiment,
+    opportunityCost,
+    counterfactual,
     reasoning: {
       score: [...scoreParts, `最终得分 ${score}（限制在 35–96）`],
       risk: riskReason,

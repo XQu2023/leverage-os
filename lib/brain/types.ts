@@ -6,6 +6,8 @@ export type BrainContext = {
   recentDecisionHistory: Array<Record<string, unknown>>;
   recentAssets: Array<Record<string, unknown>>;
   recentReviews: Array<Record<string, unknown>>;
+  predictionAccuracy: number;
+  recurringMistakes: string[];
   selectedProvider: BrainProviderId;
 };
 
@@ -29,6 +31,10 @@ export type BrainStructuredOutput = {
   biggestRisk: string;
   higherLeverageAlternative: string | null;
   todayDeliverable: string;
+  confidence: number;
+  experiment: string;
+  opportunityCost: string;
+  counterfactual: string;
   reasoning: BrainReasoning;
 };
 

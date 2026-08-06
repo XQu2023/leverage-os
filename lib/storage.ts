@@ -1,4 +1,4 @@
-export const LATEST_STORAGE_VERSION = 6 as const;
+export const LATEST_STORAGE_VERSION = 7 as const;
 export const STORAGE_KEY = "leverage-os-v1";
 export const STORAGE_BACKUP_PREFIX = `${STORAGE_KEY}-backup-`;
 
@@ -6,7 +6,7 @@ type StoredRecord = Record<string, unknown> & { storageVersion: number };
 
 export type StorageLike = Pick<Storage, "getItem" | "setItem">;
 
-export function migrateStoredState(value: unknown): StoredRecord & { storageVersion: 6 } {
+export function migrateStoredState(value: unknown): StoredRecord & { storageVersion: 7 } {
   if (!isRecord(value)) throw new Error("Stored state must be an object");
   let state: Record<string, unknown> = { ...value };
   let version = readVersion(state.storageVersion);
@@ -79,14 +79,29 @@ export function migrateStoredState(value: unknown): StoredRecord & { storageVers
     version = 6;
   }
 
+  if (version === 6) {
+    const history = Array.isArray(state.decisionHistory) ? state.decisionHistory : [];
+    const reviews = Array.isArray(state.reviews) ? state.reviews : [];
+    state = {
+      ...state,
+      decisionHistory: history.map(migrateDecisionEntry),
+      reviews: reviews.map(migrateReview),
+      predictionResult: null,
+      wrongAssumption: "",
+      nextTimeChange: "",
+      storageVersion: 7,
+    };
+    version = 7;
+  }
+
   if (version !== LATEST_STORAGE_VERSION) throw new Error(`Migration stopped at version ${version}`);
   if (!Array.isArray(state.decisionHistory) || !Array.isArray(state.assetDrafts)) throw new Error("Migrated collections are invalid");
   state.brainProvider = normalizeBrainProvider(state.brainProvider);
   state.brainUsage = normalizeBrainUsage(state.brainUsage);
-  return state as StoredRecord & { storageVersion: 6 };
+  return state as StoredRecord & { storageVersion: 7 };
 }
 
-export function loadStoredState<T extends { storageVersion: 6 }>(
+export function loadStoredState<T extends { storageVersion: 7 }>(
   storage: StorageLike,
   initialState: T,
   now = Date.now(),
@@ -133,6 +148,8 @@ function migrateDecisionEntry(value: unknown): Record<string, unknown> {
     && typeof value.tokenUsage.totalTokens === "number"
     ? value.tokenUsage
     : null;
+  const ledger = isRecord(value.ledger) ? value.ledger : {};
+  const ledgerOutcome = ledger.outcome === "happened" || ledger.outcome === "partial" || ledger.outcome === "did-not-happen" ? ledger.outcome : "pending";
   return {
     ...value,
     outcome,
@@ -141,6 +158,25 @@ function migrateDecisionEntry(value: unknown): Record<string, unknown> {
     latencyMs: typeof value.latencyMs === "number" ? value.latencyMs : 0,
     tokenUsage,
     fallback: value.fallback === true,
+    ledger: {
+      decision: typeof ledger.decision === "string" ? ledger.decision : typeof value.chosenAction === "string" ? value.chosenAction : "",
+      prediction: typeof ledger.prediction === "string" ? ledger.prediction : typeof value.aiRecommendation === "string" ? value.aiRecommendation : "",
+      outcome: ledgerOutcome,
+      confidence: typeof ledger.confidence === "number" ? ledger.confidence : score,
+      lesson: typeof ledger.lesson === "string" ? ledger.lesson : "",
+      wrongAssumption: typeof ledger.wrongAssumption === "string" ? ledger.wrongAssumption : "",
+      nextTimeChange: typeof ledger.nextTimeChange === "string" ? ledger.nextTimeChange : "",
+    },
+  };
+}
+
+function migrateReview(value: unknown): Record<string, unknown> {
+  if (!isRecord(value)) throw new Error("Review entry must be an object");
+  return {
+    ...value,
+    predictionResult: value.predictionResult === "happened" || value.predictionResult === "partial" ? value.predictionResult : "did-not-happen",
+    wrongAssumption: typeof value.wrongAssumption === "string" ? value.wrongAssumption : "未记录",
+    nextTimeChange: typeof value.nextTimeChange === "string" ? value.nextTimeChange : "未记录",
   };
 }
 

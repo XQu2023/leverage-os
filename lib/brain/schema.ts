@@ -3,6 +3,7 @@ import type { BrainStructuredOutput } from "./types.ts";
 export const BRAIN_OUTPUT_FIELDS = [
   "outcome", "score", "verdict", "recommendation", "whyToday", "biggestRisk",
   "higherLeverageAlternative", "todayDeliverable", "reasoning",
+  "confidence", "experiment", "opportunityCost", "counterfactual",
 ] as const;
 
 export const BRAIN_OUTPUT_JSON_SCHEMA = {
@@ -18,6 +19,10 @@ export const BRAIN_OUTPUT_JSON_SCHEMA = {
     biggestRisk: { type: "string" },
     higherLeverageAlternative: { type: ["string", "null"] },
     todayDeliverable: { type: "string" },
+    confidence: { type: "number", minimum: 0, maximum: 100 },
+    experiment: { type: "string" },
+    opportunityCost: { type: "string" },
+    counterfactual: { type: "string" },
     reasoning: {
       type: "object",
       additionalProperties: false,
@@ -37,7 +42,8 @@ export function parseBrainOutput(rawResponse: string): BrainStructuredOutput {
   if (!BRAIN_OUTPUT_FIELDS.every((field) => field in value)) throw new Error("Brain output is missing required fields");
   if (value.outcome !== "Execute" && value.outcome !== "Refine" && value.outcome !== "Reject Today") throw new Error("Invalid Brain outcome");
   if (typeof value.score !== "number" || value.score < 0 || value.score > 100) throw new Error("Invalid Brain score");
-  for (const field of ["verdict", "recommendation", "whyToday", "biggestRisk", "todayDeliverable"] as const) {
+  if (typeof value.confidence !== "number" || value.confidence < 0 || value.confidence > 100) throw new Error("Invalid Brain confidence");
+  for (const field of ["verdict", "recommendation", "whyToday", "biggestRisk", "todayDeliverable", "experiment", "opportunityCost", "counterfactual"] as const) {
     if (typeof value[field] !== "string" || !value[field].trim()) throw new Error(`Invalid Brain field: ${field}`);
   }
   if (value.higherLeverageAlternative !== null && typeof value.higherLeverageAlternative !== "string") throw new Error("Invalid higher-leverage alternative");

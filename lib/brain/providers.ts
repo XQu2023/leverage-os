@@ -102,6 +102,10 @@ function mockModelOutput(provider: string, input: BrainInput): BrainStructuredOu
     biggestRisk: "当前为 mock 判断；主要风险是完成标准不够具体。",
     higherLeverageAlternative: `交付“${action}”的最小可验证版本`,
     todayDeliverable: "一个可分享的结果，以及一条外部反馈。",
+    confidence: 68,
+    experiment: `今天交付“${action}”的最小版本并获得一条反馈。`,
+    opportunityCost: "执行这个行动会占用今天用于其他未验证事项的时间。",
+    counterfactual: "如果今天不执行，将失去一次获得真实反馈的机会。",
     reasoning: {
       score: [`${provider} mock 基础分 72`, "尚未调用外部模型 API"],
       risk: "Mock provider 使用固定风险模板，等待未来模型接入。",

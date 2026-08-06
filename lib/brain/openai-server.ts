@@ -19,9 +19,6 @@ export async function evaluateOpenAIDecision(input: BrainInput, options: OpenAIO
   const now = options.now ?? (() => performance.now());
   const prompt = promptBuilder.build("decision", input.context);
   const started = now();
-  const apiKeyExists = Boolean(apiKey);
-  const clientCreated = typeof fetchImpl === "function";
-  console.info("[BrainDebug]", { apiKeyExists, clientCreated, requestStarted: false, fallbackReason: null });
   let usage: Usage = { inputTokens: 0, outputTokens: 0, totalTokens: 0 };
   let lastRaw = "";
   let lastValidation: BrainValidation = { status: "fallback", schema: false, reasoning: false, deliverable: false, message: "OPENAI_API_KEY is not configured; Rules fallback used." };
@@ -30,7 +27,6 @@ export async function evaluateOpenAIDecision(input: BrainInput, options: OpenAIO
     for (let attempt = 1; attempt <= 2; attempt += 1) {
       let validationFailure = false;
       try {
-        console.info("[BrainDebug]", { apiKeyExists, clientCreated, requestStarted: true, attempt, fallbackReason: null });
         const response = await fetchImpl("https://api.openai.com/v1/responses", {
           method: "POST",
           headers: { Authorization: `Bearer ${apiKey}`, "Content-Type": "application/json" },
@@ -76,7 +72,6 @@ export async function evaluateOpenAIDecision(input: BrainInput, options: OpenAIO
   }
 
   const fallback = decisionEngine(input.context.yearlyGoal, input.context.todayAction);
-  console.warn("[BrainDebug]", { apiKeyExists, clientCreated, requestStarted: Boolean(apiKey), fallbackReason: lastValidation.message });
   return {
     prompt,
     rawResponse: lastRaw || JSON.stringify(fallback),

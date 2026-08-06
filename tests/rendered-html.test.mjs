@@ -71,6 +71,10 @@ test("implements Daily Review with all three saved prompts", async () => {
   assert.match(page, /Completed/);
   assert.match(page, /Partial/);
   assert.match(page, /Failed/);
+  assert.match(page, /Did the prediction happen\?/);
+  assert.match(page, /Wrong Assumption/);
+  assert.match(page, /Next Time/);
+  assert.match(page, /ledger: \{ \.\.\.entry\.ledger/);
 });
 
 test("links sidebar summaries to accessible asset and review libraries", async () => {
@@ -100,6 +104,10 @@ test("generates deterministic decision guidance behind a replaceable interface",
   assert.ok(first.biggestRisk);
   assert.ok(first.higherLeverageAlternative);
   assert.ok(first.todayDeliverable);
+  assert.ok(first.confidence >= 0 && first.confidence <= 100);
+  assert.ok(first.experiment);
+  assert.ok(first.opportunityCost);
+  assert.ok(first.counterfactual);
 });
 
 test("keeps the two decision paths and local choice in the page state", async () => {
@@ -170,6 +178,20 @@ test("builds bounded provider context from goals, decisions, assets, and reviews
   assert.equal(context.selectedProvider, "openai");
 });
 
+test("builds Brain memory from the last 30 ledger decisions", () => {
+  const history = Array.from({ length: 35 }, (_, index) => ({
+    id: index,
+    ledger: {
+      outcome: index < 10 ? "happened" : index < 20 ? "partial" : "did-not-happen",
+      wrongAssumption: index < 3 ? "范围太大" : index < 5 ? "反馈会自动出现" : "",
+    },
+  }));
+  const context = new ContextBuilder().build({ yearlyGoal: "目标", todayAction: "行动", selectedProvider: "rules", decisionHistory: history, assets: [], reviews: [] });
+  assert.equal(context.recentDecisionHistory.length, 30);
+  assert.equal(context.predictionAccuracy, 50);
+  assert.deepEqual(context.recurringMistakes, ["范围太大", "反馈会自动出现"]);
+});
+
 test("keeps separate prompt templates for all four Brain tasks", () => {
   const builder = new PromptBuilder();
   const context = makeBrainInput("rules").context;
@@ -189,6 +211,7 @@ test("enforces one structured JSON output schema for provider responses", async 
   assert.deepEqual(parseBrainOutput(trace.rawResponse), structuredOutput);
   assert.throws(() => parseBrainOutput('{"outcome":"Execute"}'), /missing required fields/);
   assert.throws(() => parseBrainOutput('{broken'), SyntaxError);
+  assert.throws(() => parseBrainOutput(JSON.stringify({ ...makeStructuredOutput(), confidence: 101 })), /Invalid Brain confidence/);
 });
 
 test("retries OpenAI once, validates the result, and records usage metadata", async () => {
@@ -281,6 +304,23 @@ test("migrates V2.2 storage to Auto mode and initializes usage totals", () => {
   assert.equal(migrated.storageVersion, LATEST_STORAGE_VERSION);
   assert.equal(migrated.brainProvider, "auto");
   assert.deepEqual(migrated.brainUsage, { totalCalls: 0, inputTokens: 0, outputTokens: 0, totalTokens: 0, estimatedCostUsd: 0, fallbackCount: 0 });
+});
+
+test("migrates V3 decision history into the Decision Ledger", () => {
+  const migrated = migrateStoredState({
+    storageVersion: 6,
+    brainProvider: "auto",
+    brainUsage: {},
+    decisionHistory: [{ id: "old", chosenAction: "发布页面", aiRecommendation: "收集反馈", score: 82, outcome: "Execute", completionStatus: "completed" }],
+    reviews: [{ date: "2026-08-01", action: "发布页面" }],
+    assetDrafts: [],
+  });
+  assert.equal(migrated.storageVersion, LATEST_STORAGE_VERSION);
+  assert.deepEqual(migrated.decisionHistory[0].ledger, {
+    decision: "发布页面", prediction: "收集反馈", outcome: "pending", confidence: 82,
+    lesson: "", wrongAssumption: "", nextTimeChange: "",
+  });
+  assert.equal(migrated.reviews[0].predictionResult, "did-not-happen");
 });
 
 test("explains its reasoning and explicitly rejects scores below a configurable threshold", () => {
@@ -433,7 +473,7 @@ class MemoryStorage {
 function makeBrainInput(selectedProvider = "rules", yearlyGoal = "获得 100 位客户", todayAction = "研究客户需求") {
   return {
     task: "decision",
-    context: { yearlyGoal, todayAction, recentDecisionHistory: [], recentAssets: [], recentReviews: [], selectedProvider },
+    context: { yearlyGoal, todayAction, recentDecisionHistory: [], recentAssets: [], recentReviews: [], predictionAccuracy: 0, recurringMistakes: [], selectedProvider },
   };
 }
 
@@ -447,6 +487,10 @@ function makeStructuredOutput() {
     biggestRisk: "范围扩大，导致今天无法交付。",
     higherLeverageAlternative: null,
     todayDeliverable: "今天发布 1 个可分享页面并记录 3 条用户反馈。",
+    confidence: 84,
+    experiment: "今天发布 1 个页面并向 3 位用户收集反馈。",
+    opportunityCost: "今天不会推进其他低确定性事项。",
+    counterfactual: "如果不发布，将失去今天获得真实用户证据的机会。",
     reasoning: {
       score: ["行动直接连接年度目标。", "今天可以产出可验证结果。"],
       risk: "如果不限制范围，交付时间会被推迟。",

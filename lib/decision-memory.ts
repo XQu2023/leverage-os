@@ -1,5 +1,15 @@
 export type DecisionChoice = "follow-ai" | "keep-plan";
 
+export type DecisionLedger = {
+  decision: string;
+  prediction: string;
+  outcome: "pending" | "happened" | "partial" | "did-not-happen";
+  confidence: number;
+  lesson: string;
+  wrongAssumption: string;
+  nextTimeChange: string;
+};
+
 export type DecisionHistoryEntry = {
   id: string;
   date: string;
@@ -16,6 +26,7 @@ export type DecisionHistoryEntry = {
   latencyMs: number;
   tokenUsage: { inputTokens: number; outputTokens: number; totalTokens: number } | null;
   fallback: boolean;
+  ledger: DecisionLedger;
   aiExplanation?: string;
   tomorrowRecommendation?: string;
 };
