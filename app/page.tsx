@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { BRAIN_OPTIONS, ContextBuilder, createBrain, type BrainMode, type BrainOutput, type BrainProviderId, type BrainTrace } from "@/lib/brain";
 import { generateAssetDrafts, type AssetDraft } from "@/lib/asset-drafts";
+import { emptyBusinessProfile, normalizeBusinessProfile, refreshBusinessProfile, type BusinessProfile } from "@/lib/business-profile";
 import { formatFutureValue, suggestCompound, type CompoundProposal } from "@/lib/compound-engine";
 import { explainIncompleteDecision, generateWeeklyDecisionReport, type DecisionChoice, type DecisionHistoryEntry, type WeeklyDecisionReport } from "@/lib/decision-memory";
 import { LATEST_STORAGE_VERSION, STORAGE_KEY, loadStoredState } from "@/lib/storage";
@@ -19,7 +20,7 @@ type Review = {
   nextTimeChange: string;
 };
 
-type View = "today" | "assets" | "reviews" | "weekly";
+type View = "today" | "assets" | "reviews" | "weekly" | "profile";
 type AiChoice = DecisionChoice | null;
 const contextBuilder = new ContextBuilder();
 
@@ -32,6 +33,7 @@ type State = {
   action: string;
   multiplier: string;
   compound: CompoundProposal;
+  businessProfile: BusinessProfile;
   completed: boolean;
   assets: string[];
   selectedAssets: string[];
@@ -59,6 +61,7 @@ const initialState: State = {
   action: "",
   multiplier: "",
   compound: emptyCompound,
+  businessProfile: emptyBusinessProfile(),
   completed: false,
   assets: [],
   selectedAssets: [],
@@ -126,26 +129,40 @@ export default function Home() {
       const assets = suggestAssets(stored.action);
       const selectedAssets = stored.selectedAssets.filter((asset) => typeof asset === "string");
       const compound = ensureCompound(stored.action, stored.compound ?? { asset: stored.multiplier });
-      setData({ ...stored, assets, selectedAssets, compound, multiplier: compound.asset || stored.multiplier });
+      const businessProfile = refreshBusinessProfile(
+        normalizeBusinessProfile(stored.businessProfile, stored.goal),
+        { goal: stored.goal, decisionHistory: stored.decisionHistory, reviews: stored.reviews, selectedAssets, assetDrafts: stored.assetDrafts },
+      );
+      setData({ ...stored, assets, selectedAssets, compound, multiplier: compound.asset || stored.multiplier, businessProfile });
     } finally {
       setHydrated(true);
     }
   }, []);
 
+  const businessProfile = useMemo(() => refreshBusinessProfile(data.businessProfile, {
+    goal: data.goal,
+    decisionHistory: data.decisionHistory,
+    reviews: data.reviews,
+    selectedAssets: data.selectedAssets,
+    assetDrafts: data.assetDrafts,
+  }), [data.businessProfile, data.goal, data.decisionHistory, data.reviews, data.selectedAssets, data.assetDrafts]);
+
   useEffect(() => {
-    if (hydrated) window.localStorage.setItem(STORAGE_KEY, JSON.stringify(data));
-  }, [data, hydrated]);
+    if (!hydrated) return;
+    window.localStorage.setItem(STORAGE_KEY, JSON.stringify({ ...data, businessProfile }));
+  }, [data, businessProfile, hydrated]);
 
   const activeProvider: BrainProviderId = data.brainProvider === "auto" ? "openai" : data.brainProvider;
   const brain = useMemo(() => createBrain(activeProvider), [activeProvider]);
   const brainContext = useMemo(() => contextBuilder.build({
     yearlyGoal: data.goal,
     todayAction: data.action,
+    businessProfile,
     decisionHistory: data.decisionHistory,
     assets: data.assetDrafts.filter((draft) => draft.status === "saved"),
     reviews: data.reviews,
     selectedProvider: activeProvider,
-  }), [data.goal, data.action, data.decisionHistory, data.assetDrafts, data.reviews, activeProvider]);
+  }), [data.goal, data.action, businessProfile, data.decisionHistory, data.assetDrafts, data.reviews, activeProvider]);
   const brainInput = useMemo(() => ({ task: "decision" as const, context: brainContext }), [brainContext]);
   const evaluationKey = JSON.stringify(brainInput);
   useEffect(() => {
@@ -250,6 +267,14 @@ export default function Home() {
     update({ compound, multiplier: compound.asset });
   }
 
+  function updateBusinessProfile(patch: Partial<BusinessProfile>) {
+    const businessProfile = { ...data.businessProfile, ...patch };
+    update({
+      businessProfile,
+      goal: patch.yearlyGoal !== undefined ? patch.yearlyGoal : data.goal,
+    });
+  }
+
   function updateAssetDraft(id: string, patch: Partial<AssetDraft>) {
     update({ assetDrafts: data.assetDrafts.map((draft) => draft.id === id ? { ...draft, ...patch } : draft) });
   }
@@ -303,6 +328,12 @@ export default function Home() {
     setSelectedReview(null);
   }
 
+  function openProfile() {
+    setView("profile");
+    setSelectedAsset(null);
+    setSelectedReview(null);
+  }
+
   return (
     <main className="app-shell">
       <aside className="sidebar">
@@ -311,6 +342,7 @@ export default function Home() {
           <button className={`nav-item ${view === "today" ? "active" : ""}`} onClick={openToday}><span>◆</span> Today</button>
           <button className="nav-item" onClick={openGoal}><span>↗</span> One-Year Goal</button>
           <button className={`nav-item ${view === "weekly" ? "active" : ""}`} onClick={openWeekly}><span>◎</span> Weekly Report</button>
+          <button className={`nav-item ${view === "profile" ? "active" : ""}`} onClick={openProfile}><span>□</span> Business Profile</button>
           <div className="nav-spacer" />
           <p className="nav-label">YOUR SYSTEM</p>
           <button className={`system-stat ${view === "assets" ? "active" : ""}`} onClick={openAssets} aria-label={`查看留下的资产，共 ${data.selectedAssets.length} 项`}><span>留下的资产</span><strong>{data.selectedAssets.length}</strong></button>
@@ -339,6 +371,8 @@ export default function Home() {
 
           {view === "weekly" && <WeeklyReportView report={weeklyReport} onBack={openToday} />}
 
+          {view === "profile" && <BusinessProfileView profile={businessProfile} onChange={updateBusinessProfile} onBack={openToday} />}
+
           {view === "today" && <>
           <div className="stepper" aria-label="今日流程">
             {["年度目标", "最高杠杆", "AI 判断", "复利引擎", "留下资产", "日回顾"].map((label, index) => (
@@ -353,7 +387,7 @@ export default function Home() {
               <p className="kicker">01 · ONE-YEAR GOAL</p>
               <h2>一年后，什么结果会真正改变你的处境？</h2>
               <p className="lead">只保留一个目标。它将成为每天判断取舍的唯一坐标。</p>
-              <textarea className="hero-input" value={data.goal} onChange={(e) => update({ goal: e.target.value })} placeholder="例如：在 12 个月内，让产品达到 100 万年收入…" autoFocus />
+              <textarea className="hero-input" value={data.goal} onChange={(e) => update({ goal: e.target.value, businessProfile: { ...data.businessProfile, yearlyGoal: e.target.value } })} placeholder="例如：在 12 个月内，让产品达到 100 万年收入…" autoFocus />
               <p className="input-hint">清晰、可衡量、有截止时间</p>
             </>}
 
@@ -528,6 +562,51 @@ function ReviewDetail({ review, onBack }: { review: Review; onBack: () => void }
     <span className="detail-label">Wrong Assumption</span><p>{review.wrongAssumption || "—"}</p>
     <span className="detail-label">Next Time</span><p>{review.nextTimeChange || "—"}</p>
   </DetailCard>;
+}
+
+function BusinessProfileView({ profile, onChange, onBack }: { profile: BusinessProfile; onChange: (patch: Partial<BusinessProfile>) => void; onBack: () => void }) {
+  const editableFields: Array<{ key: keyof BusinessProfile; label: string; hint: string; placeholder: string }> = [
+    { key: "yearlyGoal", label: "一年目标", hint: "YEARLY GOAL", placeholder: "一年后真正改变处境的结果…" },
+    { key: "industry", label: "行业", hint: "INDUSTRY", placeholder: "你所在的行业或细分市场…" },
+    { key: "businessModel", label: "商业模式", hint: "BUSINESS MODEL", placeholder: "你如何创造和获取价值…" },
+    { key: "currentStage", label: "当前阶段", hint: "CURRENT STAGE", placeholder: "例如：验证、增长、扩张…" },
+    { key: "coreAdvantage", label: "核心优势", hint: "CORE ADVANTAGE", placeholder: "你比别人更能复用的优势…" },
+    { key: "currentConstraint", label: "当前约束", hint: "CURRENT CONSTRAINT", placeholder: "今天最限制你的条件…" },
+    { key: "decisionPrinciples", label: "决策原则", hint: "DECISION PRINCIPLES", placeholder: "你反复使用的判断规则…" },
+  ];
+  const memoryFields: Array<{ key: keyof BusinessProfile; label: string; hint: string }> = [
+    { key: "recentProjects", label: "最近主要项目", hint: "RECENT PROJECTS" },
+    { key: "recentSuccesses", label: "最近成功经验", hint: "RECENT SUCCESSES" },
+    { key: "recentFailures", label: "最近失败经验", hint: "RECENT FAILURES" },
+    { key: "mostValuableAssets", label: "最有价值资产", hint: "MOST VALUABLE ASSETS" },
+    { key: "last30DaysFocus", label: "最近30天重点", hint: "LAST 30 DAYS FOCUS" },
+  ];
+
+  return <section className="library business-profile" aria-labelledby="business-profile-title">
+    <button className="library-back" onClick={onBack}>← 返回 Today</button>
+    <p className="kicker">BUSINESS PROFILE</p>
+    <h2 id="business-profile-title">让 AI 记住你的长期业务</h2>
+    <p className="lead">编辑你的业务画像。AI 会据此判断，并自动维护近期记忆。</p>
+    <div className="review-form profile-form">
+      {editableFields.map((field) => (
+        <label key={field.key}>
+          <span>{field.hint}</span>
+          <strong>{field.label}</strong>
+          <textarea value={String(profile[field.key] ?? "")} onChange={(event) => onChange({ [field.key]: event.target.value })} placeholder={field.placeholder} />
+        </label>
+      ))}
+    </div>
+    <p className="nav-label profile-memory-label">AI MEMORY · 只读，自动更新</p>
+    <div className="report-grid profile-memory">
+      {memoryFields.map((field) => {
+        const values = profile[field.key];
+        const items = Array.isArray(values) ? values : [];
+        return <ReportCard key={field.key} label={field.hint} title={field.label}>
+          <ul>{items.length ? items.map((item) => <li key={item}>{item}</li>) : <li>暂无足够数据，完成更多决策后自动更新</li>}</ul>
+        </ReportCard>;
+      })}
+    </div>
+  </section>;
 }
 
 function WeeklyReportView({ report, onBack }: { report: WeeklyDecisionReport; onBack: () => void }) {

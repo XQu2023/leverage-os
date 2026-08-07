@@ -1,8 +1,10 @@
+import { normalizeBusinessProfile, type BusinessProfile } from "../business-profile.ts";
 import type { BrainContext, BrainProviderId } from "./types.ts";
 
 type ContextSource = {
   yearlyGoal: string;
   todayAction: string;
+  businessProfile?: BusinessProfile | null;
   decisionHistory: unknown[];
   assets: unknown[];
   reviews: unknown[];
@@ -19,9 +21,11 @@ export class ContextBuilder {
   readonly resourceLimit: number;
 
   build(source: ContextSource): BrainContext {
+    const yearlyGoal = source.yearlyGoal.trim();
     return {
-      yearlyGoal: source.yearlyGoal.trim(),
+      yearlyGoal,
       todayAction: source.todayAction.trim(),
+      businessProfile: normalizeBusinessProfile(source.businessProfile, yearlyGoal),
       recentDecisionHistory: toRecords(source.decisionHistory, this.limit),
       recentAssets: toRecords(source.assets, this.resourceLimit),
       recentReviews: toRecords(source.reviews, this.resourceLimit),

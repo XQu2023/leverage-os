@@ -3,6 +3,7 @@ import { readFile } from "node:fs/promises";
 import test from "node:test";
 import { decisionEngine } from "../lib/decision-engine.ts";
 import { generateAssetDrafts } from "../lib/asset-drafts.ts";
+import { deriveBusinessMemory, emptyBusinessProfile, normalizeBusinessProfile, refreshBusinessProfile } from "../lib/business-profile.ts";
 import { formatFutureValue, suggestCompound } from "../lib/compound-engine.ts";
 import { explainIncompleteDecision, generateWeeklyDecisionReport } from "../lib/decision-memory.ts";
 import { LATEST_STORAGE_VERSION, STORAGE_BACKUP_PREFIX, STORAGE_KEY, loadStoredState, migrateStoredState } from "../lib/storage.ts";
@@ -191,12 +192,16 @@ test("calls browser fetch without binding the provider as its receiver", async (
 test("builds bounded provider context from goals, decisions, assets, and reviews", () => {
   const context = new ContextBuilder(2).build({
     yearlyGoal: " 100 位客户 ", todayAction: " 完成访谈 ", selectedProvider: "openai",
+    businessProfile: { ...emptyBusinessProfile(), industry: "SaaS", coreAdvantage: "速度" },
     decisionHistory: [{ id: 1 }, { id: 2 }, { id: 3 }],
     assets: [{ id: "a" }, { id: "b" }, { id: "c" }],
     reviews: [{ id: "r1" }],
   });
   assert.equal(context.yearlyGoal, "100 位客户");
   assert.equal(context.todayAction, "完成访谈");
+  assert.equal(context.businessProfile.industry, "SaaS");
+  assert.equal(context.businessProfile.coreAdvantage, "速度");
+  assert.equal(context.businessProfile.yearlyGoal, "100 位客户");
   assert.equal(context.recentDecisionHistory.length, 2);
   assert.equal(context.recentAssets.length, 2);
   assert.equal(context.recentReviews.length, 1);
@@ -211,10 +216,64 @@ test("builds Brain memory from the last 30 ledger decisions", () => {
       wrongAssumption: index < 3 ? "范围太大" : index < 5 ? "反馈会自动出现" : "",
     },
   }));
-  const context = new ContextBuilder().build({ yearlyGoal: "目标", todayAction: "行动", selectedProvider: "rules", decisionHistory: history, assets: [], reviews: [] });
+  const context = new ContextBuilder().build({ yearlyGoal: "目标", todayAction: "行动", selectedProvider: "rules", decisionHistory: history, assets: [], reviews: [], businessProfile: emptyBusinessProfile() });
   assert.equal(context.recentDecisionHistory.length, 30);
   assert.equal(context.predictionAccuracy, 50);
   assert.deepEqual(context.recurringMistakes, ["范围太大", "反馈会自动出现"]);
+  assert.ok(context.businessProfile);
+});
+
+test("derives and persists Business Memory from decisions, assets, and reviews", () => {
+  const now = new Date("2026-08-07T12:00:00.000Z");
+  const memory = deriveBusinessMemory({
+    goal: "100 位客户",
+    decisionHistory: [
+      { date: "2026-08-06T09:00:00.000Z", chosenAction: "完成访谈", completionStatus: "completed", score: 90, ledger: { outcome: "happened" } },
+      { date: "2026-08-05T09:00:00.000Z", chosenAction: "冷启动广告", completionStatus: "failed", biggestWaste: "渠道不匹配", ledger: { outcome: "did-not-happen" } },
+    ],
+    reviews: [{ date: "2026-08-06T20:00:00.000Z", action: "完成访谈", bestAsset: "访谈模板", tomorrowFocus: "跟进 3 位客户", biggestWaste: "记录不完整" }],
+    selectedAssets: ["客户跟进 SOP"],
+    assetDrafts: [{ title: "访谈 Prompt", status: "saved" }],
+  }, now);
+
+  assert.deepEqual(memory.recentProjects, ["完成访谈", "冷启动广告"]);
+  assert.deepEqual(memory.recentSuccesses, ["完成访谈"]);
+  assert.ok(memory.recentFailures.includes("渠道不匹配"));
+  assert.ok(memory.mostValuableAssets.includes("客户跟进 SOP"));
+  assert.ok(memory.mostValuableAssets.includes("访谈模板"));
+  assert.ok(memory.last30DaysFocus.includes("跟进 3 位客户"));
+
+  const profile = refreshBusinessProfile(normalizeBusinessProfile({ industry: "教育" }, "旧目标"), {
+    goal: "100 位客户",
+    decisionHistory: [],
+    reviews: [],
+    selectedAssets: [],
+    assetDrafts: [],
+  }, now);
+  assert.equal(profile.industry, "教育");
+  assert.equal(profile.yearlyGoal, "100 位客户");
+});
+
+test("exposes an editable Business Profile view with AI-maintained memory", async () => {
+  const page = await readFile(new URL("../app/page.tsx", import.meta.url), "utf8");
+  assert.match(page, /BUSINESS PROFILE/);
+  assert.match(page, /onClick=\{openProfile\}/);
+  assert.match(page, /function BusinessProfileView/);
+  assert.match(page, /一年目标/);
+  assert.match(page, /行业/);
+  assert.match(page, /商业模式/);
+  assert.match(page, /当前阶段/);
+  assert.match(page, /核心优势/);
+  assert.match(page, /当前约束/);
+  assert.match(page, /决策原则/);
+  assert.match(page, /最近主要项目/);
+  assert.match(page, /最近成功经验/);
+  assert.match(page, /最近失败经验/);
+  assert.match(page, /最有价值资产/);
+  assert.match(page, /最近30天重点/);
+  assert.match(page, /businessProfile,/);
+  assert.match(page, /refreshBusinessProfile/);
+  assert.match(page, /AI MEMORY/);
 });
 
 test("keeps separate prompt templates for all four Brain tasks", () => {
@@ -226,6 +285,7 @@ test("keeps separate prompt templates for all four Brain tasks", () => {
     assert.match(prompt, /Return JSON only/);
     assert.match(prompt, new RegExp(`PROMPT_VERSION: ${PROMPT_VERSIONS[task]}`));
     assert.match(prompt, /yearlyGoal/);
+    assert.match(prompt, /businessProfile/);
   }
 });
 
@@ -346,6 +406,21 @@ test("migrates V3 decision history into the Decision Ledger", () => {
     lesson: "", wrongAssumption: "", nextTimeChange: "",
   });
   assert.equal(migrated.reviews[0].predictionResult, "did-not-happen");
+});
+
+test("migrates V3.2 storage into Business Profile memory", () => {
+  const migrated = migrateStoredState({
+    storageVersion: 7,
+    goal: "做到 100 万年收入",
+    brainProvider: "auto",
+    brainUsage: {},
+    decisionHistory: [],
+    assetDrafts: [],
+  });
+  assert.equal(migrated.storageVersion, LATEST_STORAGE_VERSION);
+  assert.equal(migrated.businessProfile.yearlyGoal, "做到 100 万年收入");
+  assert.deepEqual(migrated.businessProfile.recentProjects, []);
+  assert.equal(migrated.businessProfile.industry, "");
 });
 
 test("explains its reasoning and explicitly rejects scores below a configurable threshold", () => {
@@ -498,7 +573,17 @@ class MemoryStorage {
 function makeBrainInput(selectedProvider = "rules", yearlyGoal = "获得 100 位客户", todayAction = "研究客户需求") {
   return {
     task: "decision",
-    context: { yearlyGoal, todayAction, recentDecisionHistory: [], recentAssets: [], recentReviews: [], predictionAccuracy: 0, recurringMistakes: [], selectedProvider },
+    context: {
+      yearlyGoal,
+      todayAction,
+      businessProfile: { ...emptyBusinessProfile(), yearlyGoal },
+      recentDecisionHistory: [],
+      recentAssets: [],
+      recentReviews: [],
+      predictionAccuracy: 0,
+      recurringMistakes: [],
+      selectedProvider,
+    },
   };
 }
 

@@ -1,8 +1,11 @@
+import type { BusinessProfile } from "../business-profile.ts";
+
 export type BrainTask = "decision" | "multiplier" | "asset" | "review";
 
 export type BrainContext = {
   yearlyGoal: string;
   todayAction: string;
+  businessProfile: BusinessProfile;
   recentDecisionHistory: Array<Record<string, unknown>>;
   recentAssets: Array<Record<string, unknown>>;
   recentReviews: Array<Record<string, unknown>>;

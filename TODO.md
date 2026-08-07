@@ -2,7 +2,7 @@
 ## V3
 - [ ] Decision Ledger
 - [x] Compound Engine
-- [ ] Business Memory
+- [x] Business Memory
 - [ ] Opportunity Cost Engine
 ## Product
 - [ ] Improve AI decision quality

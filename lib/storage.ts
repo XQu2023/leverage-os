@@ -1,4 +1,6 @@
-export const LATEST_STORAGE_VERSION = 7 as const;
+import { normalizeBusinessProfile } from "./business-profile.ts";
+
+export const LATEST_STORAGE_VERSION = 8 as const;
 export const STORAGE_KEY = "leverage-os-v1";
 export const STORAGE_BACKUP_PREFIX = `${STORAGE_KEY}-backup-`;
 
@@ -6,7 +8,7 @@ type StoredRecord = Record<string, unknown> & { storageVersion: number };
 
 export type StorageLike = Pick<Storage, "getItem" | "setItem">;
 
-export function migrateStoredState(value: unknown): StoredRecord & { storageVersion: 7 } {
+export function migrateStoredState(value: unknown): StoredRecord & { storageVersion: 8 } {
   if (!isRecord(value)) throw new Error("Stored state must be an object");
   let state: Record<string, unknown> = { ...value };
   let version = readVersion(state.storageVersion);
@@ -94,14 +96,25 @@ export function migrateStoredState(value: unknown): StoredRecord & { storageVers
     version = 7;
   }
 
+  if (version === 7) {
+    const goal = typeof state.goal === "string" ? state.goal : "";
+    state = {
+      ...state,
+      businessProfile: normalizeBusinessProfile(state.businessProfile, goal),
+      storageVersion: 8,
+    };
+    version = 8;
+  }
+
   if (version !== LATEST_STORAGE_VERSION) throw new Error(`Migration stopped at version ${version}`);
   if (!Array.isArray(state.decisionHistory) || !Array.isArray(state.assetDrafts)) throw new Error("Migrated collections are invalid");
   state.brainProvider = normalizeBrainProvider(state.brainProvider);
   state.brainUsage = normalizeBrainUsage(state.brainUsage);
-  return state as StoredRecord & { storageVersion: 7 };
+  state.businessProfile = normalizeBusinessProfile(state.businessProfile, typeof state.goal === "string" ? state.goal : "");
+  return state as StoredRecord & { storageVersion: 8 };
 }
 
-export function loadStoredState<T extends { storageVersion: 7 }>(
+export function loadStoredState<T extends { storageVersion: 8 }>(
   storage: StorageLike,
   initialState: T,
   now = Date.now(),
