@@ -104,7 +104,7 @@ function mockModelOutput(provider: string, input: BrainInput): BrainStructuredOu
     todayDeliverable: "一个可分享的结果，以及一条外部反馈。",
     confidence: 68,
     experiment: `今天交付“${action}”的最小版本并获得一条反馈。`,
-    opportunityCost: "执行这个行动会占用今天用于其他未验证事项的时间。",
+    opportunityCost: "今天不做这件事，将至少延迟 2–3 天获得可验证反馈。",
     counterfactual: "如果今天不执行，将失去一次获得真实反馈的机会。",
     reasoning: {
       score: [`${provider} mock 基础分 72`, "尚未调用外部模型 API"],

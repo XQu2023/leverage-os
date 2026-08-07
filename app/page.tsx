@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
-import { BRAIN_OPTIONS, ContextBuilder, createBrain, type BrainMode, type BrainOutput, type BrainProviderId, type BrainTrace } from "@/lib/brain";
+import { BRAIN_OPTIONS, ContextBuilder, createBrain, formatConfidencePercent, type BrainMode, type BrainOutput, type BrainProviderId, type BrainTrace } from "@/lib/brain";
 import { generateAssetDrafts, type AssetDraft } from "@/lib/asset-drafts";
 import { emptyBusinessProfile, normalizeBusinessProfile, refreshBusinessProfile, type BusinessProfile } from "@/lib/business-profile";
 import { formatFutureValue, suggestCompound, type CompoundProposal } from "@/lib/compound-engine";
@@ -191,7 +191,14 @@ export default function Home() {
       setBrainTrace({ key: evaluationKey, trace: primary });
       setBrainComparison(comparison);
       setLastUpdated(new Date().toISOString());
-      setData((current) => ({ ...current, brainUsage: addBrainUsage(current.brainUsage, traces.map((trace) => trace.parsedOutput)) }));
+      setData((current) => ({
+        ...current,
+        brainUsage: addBrainUsage(current.brainUsage, traces.map((trace) => trace.parsedOutput)),
+        oneBet: {
+          ...current.oneBet,
+          abandonCost: primary.parsedOutput.opportunityCost.trim() || current.oneBet.abandonCost,
+        },
+      }));
     });
     return () => { active = false; };
   }, [activeProvider, brain, brainInput, compareMode, evaluationKey, step]);
@@ -454,7 +461,8 @@ export default function Home() {
                 <div className="future-value"><span>★</span><p><strong>预计收益</strong><em aria-label={`预计收益 ${data.oneBet.expectedReturn} 星`}>{formatExpectedReturn(data.oneBet.expectedReturn)}</em><span className="star-picker">{([1, 2, 3, 4, 5] as const).map((value) => <button type="button" key={value} className={data.oneBet.expectedReturn >= value ? "active" : ""} onClick={() => updateOneBet({ expectedReturn: value })} aria-label={`${value} 星`}>★</button>)}</span></p></div>
                 <div><span>⏱</span><p><strong>反馈周期</strong><textarea value={data.oneBet.feedbackCycle} onChange={(e) => updateOneBet({ feedbackCycle: e.target.value })} placeholder="今天至 48 小时内" /><small>预计多久得到验证</small></p></div>
               </div>
-              <div className="why-only"><small>【为什么这是今天唯一值得做的事？】</small><textarea value={data.oneBet.whyOnly} onChange={(e) => updateOneBet({ whyOnly: e.target.value })} placeholder="解释为什么放弃其它事情，只押这一注。" /></div>
+              <div className="abandon-cost"><small>放弃成本</small><p>{data.oneBet.abandonCost || "Brain 将根据你的行动自动生成。"}</p></div>
+              <div className="why-only"><small>【为什么这是今天唯一值得做的事？】</small><textarea value={data.oneBet.whyOnly} onChange={(e) => updateOneBet({ whyOnly: e.target.value })} placeholder="一句话说明为什么只押这一注。" /></div>
               <div className="constraint"><span>1</span><p><strong>只选一个</strong><br />不是待办清单，而是今天最重要的下注。</p></div>
             </>}
 
@@ -465,12 +473,14 @@ export default function Home() {
               <div className="brain-tools"><button type="button" className={compareMode ? "active" : ""} onClick={() => setCompareMode((value) => !value)}>Compare {compareMode ? "On" : "Off"}</button><button type="button" className={debugOpen ? "active" : ""} onClick={() => setDebugOpen((value) => !value)}>Debug</button></div>
               {judgment ? <>
               <BrainStatus output={judgment} lastUpdated={lastUpdated} mode={data.brainProvider} />
+              <div className="confidence-badge" aria-label="AI 判断置信度"><small>AI 判断置信度</small><strong>{formatConfidencePercent(judgment.confidence)}</strong></div>
               <div className="judgment-card">
                 <div className="score-ring" style={{ "--score": `${judgment.score * 3.6}deg` } as React.CSSProperties}><span>{judgment.score}</span><small>/ 100</small></div>
                 <div><span className="verdict">{judgment.verdict}</span><h3>{data.action}</h3><p>{judgment.whyToday}</p></div>
               </div>
+              <div className="abandon-cost judgment-abandon"><small>放弃成本</small><p>{judgment.opportunityCost}</p></div>
               <div className="criteria"><div><span>!</span><p><strong>最大风险</strong><br />{judgment.biggestRisk}</p></div><div><span>↑</span><p><strong>更高杠杆选择</strong><br />{judgment.higherLeverageAlternative ?? "当前计划已经足够直接，建议保持。"}</p></div><div><span>✓</span><p><strong>今日交付物</strong><br />{judgment.todayDeliverable}</p></div></div>
-              <details className="decision-reasoning"><summary>Why?</summary><div><strong>置信度</strong><p>{judgment.confidence}%</p><strong>评分依据</strong><ul>{judgment.reasoning.score.map((reason) => <li key={reason}>{reason}</li>)}</ul><strong>实验</strong><p>{judgment.experiment}</p><strong>机会成本</strong><p>{judgment.opportunityCost}</p><strong>反事实</strong><p>{judgment.counterfactual}</p><strong>风险依据</strong><p>{judgment.reasoning.risk}</p><strong>建议依据</strong><p>{judgment.reasoning.recommendation}</p></div></details>
+              <details className="decision-reasoning"><summary>详细分析</summary><div><strong>评分依据</strong><ul>{judgment.reasoning.score.map((reason) => <li key={reason}>{reason}</li>)}</ul><strong>实验</strong><p>{judgment.experiment}</p><strong>反事实</strong><p>{judgment.counterfactual}</p><strong>风险依据</strong><p>{judgment.reasoning.risk}</p><strong>建议依据</strong><p>{judgment.reasoning.recommendation}</p></div></details>
               {compareMode && comparison && <ComparisonView rules={comparison.rules.parsedOutput} openai={comparison.openai.parsedOutput} />}
               {debugOpen && developerTrace && <BrainInspector trace={developerTrace} usage={data.brainUsage} />}
               </> : <div className="judgment-card brain-loading"><span className="verdict">Evaluating</span><p>Brain 正在生成判断…</p></div>}

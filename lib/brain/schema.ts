@@ -6,6 +6,17 @@ export const BRAIN_OUTPUT_FIELDS = [
   "confidence", "experiment", "opportunityCost", "counterfactual",
 ] as const;
 
+/** Models may return 0.94 (fraction) or 94 (percent). Always expose 0–100 percent. */
+export function normalizeConfidencePercent(value: number): number {
+  if (!Number.isFinite(value) || value < 0) return 0;
+  const percent = value > 0 && value <= 1 ? value * 100 : value;
+  return Math.min(100, Math.max(0, Math.round(percent)));
+}
+
+export function formatConfidencePercent(value: number): string {
+  return `${normalizeConfidencePercent(value)}%`;
+}
+
 export const BRAIN_OUTPUT_JSON_SCHEMA = {
   type: "object",
   additionalProperties: false,
@@ -48,7 +59,10 @@ export function parseBrainOutput(rawResponse: string): BrainStructuredOutput {
   }
   if (value.higherLeverageAlternative !== null && typeof value.higherLeverageAlternative !== "string") throw new Error("Invalid higher-leverage alternative");
   if (!isRecord(value.reasoning) || !Array.isArray(value.reasoning.score) || value.reasoning.score.length === 0 || !value.reasoning.score.every((item) => typeof item === "string" && item.trim()) || typeof value.reasoning.risk !== "string" || !value.reasoning.risk.trim() || typeof value.reasoning.recommendation !== "string" || !value.reasoning.recommendation.trim()) throw new Error("Invalid Brain reasoning");
-  return value as BrainStructuredOutput;
+  return {
+    ...(value as BrainStructuredOutput),
+    confidence: normalizeConfidencePercent(value.confidence),
+  };
 }
 
 export function validateBrainEvaluation(output: BrainStructuredOutput): void {

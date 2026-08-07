@@ -86,8 +86,14 @@ export function decisionEngine(
   const confidence = Math.max(45, Math.min(95, score - (vague ? 15 : 3)));
   const experiment = `在今天结束前完成：${todayDeliverable}`;
   const opportunityCost = rejected
-    ? "继续投入会占用本可用于一个可验证行动的时间。"
-    : "选择这个行动意味着今天不会推进其他低确定性事项。";
+    ? "今天继续投入模糊事项，将至少再延迟 2–3 天才能换到一个可验证行动。"
+    : customerFacing
+      ? "今天不联系客户，将至少延迟 3 天获得真实市场反馈。"
+      : content
+        ? "今天不发布，将至少延迟 2 天获得读者真实反应。"
+        : product
+          ? "今天不上线验证，将至少延迟 3 天获得用户使用证据。"
+          : `今天不做“${normalizedAction}”，将延迟获得可验证反馈，并让其它低确定性事项继续占用注意力。`;
   const counterfactual = rejected
     ? "如果今天不做，先定义可验证交付物，明天的执行质量会更高。"
     : `如果今天不执行，最可能失去的是与“${normalizedAction}”相关的即时证据。`;

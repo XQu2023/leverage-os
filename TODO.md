@@ -5,6 +5,7 @@
 - [x] Business Memory
 - [x] Decision Quality Loop
 - [x] One Bet
+- [x] Confidence & Opportunity Cost
 - [ ] Opportunity Cost Engine
 ## Product
 - [x] Improve AI decision quality

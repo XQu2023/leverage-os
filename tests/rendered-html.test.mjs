@@ -7,9 +7,9 @@ import { deriveBusinessMemory, emptyBusinessProfile, normalizeBusinessProfile, r
 import { formatFutureValue, suggestCompound } from "../lib/compound-engine.ts";
 import { explainIncompleteDecision, generateWeeklyDecisionReport } from "../lib/decision-memory.ts";
 import { extractLearningLoop, formatLessonSummary, generateDecisionLesson, outcomeFromCompletion } from "../lib/decision-quality.ts";
-import { ONE_BET_ACTION_MAX, clipBetAction, formatExpectedReturn, suggestOneBet } from "../lib/one-bet.ts";
+import { ONE_BET_ACTION_MAX, clipBetAction, formatExpectedReturn, suggestAbandonCost, suggestOneBet } from "../lib/one-bet.ts";
 import { LATEST_STORAGE_VERSION, STORAGE_BACKUP_PREFIX, STORAGE_KEY, loadStoredState, migrateStoredState } from "../lib/storage.ts";
-import { BRAIN_OPTIONS, ContextBuilder, OpenAIBrainProvider, PROMPT_VERSIONS, PromptBuilder, RuleBrainProvider, createBrain, parseBrainOutput } from "../lib/brain/index.ts";
+import { BRAIN_OPTIONS, ContextBuilder, OpenAIBrainProvider, PROMPT_VERSIONS, PromptBuilder, RuleBrainProvider, createBrain, formatConfidencePercent, normalizeConfidencePercent, parseBrainOutput } from "../lib/brain/index.ts";
 import { evaluateOpenAIDecision } from "../lib/brain/openai-server.ts";
 
 async function render() {
@@ -118,10 +118,12 @@ test("implements One Bet on Step 2 with short action and metrics", async () => {
   assert.match(page, /预计收益/);
   assert.match(page, /反馈周期/);
   assert.match(page, /为什么这是今天唯一值得做的事？/);
+  assert.match(page, /放弃成本/);
   assert.match(page, /ONE_BET_ACTION_MAX/);
   assert.match(page, /updateOneBet/);
   assert.match(css, /\.one-bet-card/);
   assert.match(css, /\.why-only/);
+  assert.match(css, /\.abandon-cost/);
   assert.equal(ONE_BET_ACTION_MAX, 30);
   assert.equal(clipBetAction("立即联系20家英国客户，验证真实需求。这是超过三十个字的额外说明文字"), "立即联系20家英国客户，验证真实需求。这是超过三十个字的额外");
   assert.equal(Array.from(clipBetAction("立即联系20家英国客户，验证真实需求。这是超过三十个字的额外说明文字")).length, 30);
@@ -129,6 +131,24 @@ test("implements One Bet on Step 2 with short action and metrics", async () => {
   assert.equal(bet.expectedReturn, 5);
   assert.equal(formatExpectedReturn(5), "★★★★★");
   assert.match(bet.whyOnly, /只/);
+  assert.match(bet.abandonCost, /延迟 3 天/);
+  assert.match(suggestAbandonCost("立即联系20家英国客户"), /真实市场反馈/);
+});
+
+test("normalizes Brain confidence fractions and surfaces abandon cost", async () => {
+  const page = await readFile(new URL("../app/page.tsx", import.meta.url), "utf8");
+  const fractional = parseBrainOutput(JSON.stringify({ ...makeStructuredOutput(), confidence: 0.94 }));
+
+  assert.equal(normalizeConfidencePercent(0.94), 94);
+  assert.equal(formatConfidencePercent(0.94), "94%");
+  assert.equal(formatConfidencePercent(94), "94%");
+  assert.equal(fractional.confidence, 94);
+  assert.doesNotMatch(formatConfidencePercent(0.94), /0\.94%/);
+  assert.match(page, /AI 判断置信度/);
+  assert.match(page, /formatConfidencePercent/);
+  assert.match(page, /详细分析/);
+  assert.doesNotMatch(page, /<summary>Why\?<\/summary>/);
+  assert.match(page, /abandonCost: primary\.parsedOutput\.opportunityCost/);
 });
 
 test("implements Decision Quality Loop feedback, outcomes, and lessons", async () => {
@@ -539,6 +559,7 @@ test("migrates V3.4 storage into One Bet fields", () => {
   });
   assert.equal(migrated.storageVersion, LATEST_STORAGE_VERSION);
   assert.equal(migrated.oneBet.action, "立即联系20家英国客户，验证真实需求。");
+  assert.equal(migrated.oneBet.abandonCost, "");
 });
 
 test("explains its reasoning and explicitly rejects scores below a configurable threshold", () => {
@@ -573,7 +594,7 @@ test("builds a seven-day decision report from local history", () => {
 test("persists decision memory and exposes the weekly report", async () => {
   const page = await readFile(new URL("../app/page.tsx", import.meta.url), "utf8");
 
-  assert.match(page, /<summary>Why\?<\/summary>/);
+  assert.match(page, /<summary>详细分析<\/summary>/);
   assert.match(page, /decisionHistory/);
   assert.match(page, /completionStatus: "pending"/);
   assert.match(page, /completionStatus: "completed"/);

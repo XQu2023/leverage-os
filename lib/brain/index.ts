@@ -5,7 +5,7 @@ export type { Brain, BrainContext, BrainInput, BrainMetadata, BrainMode, BrainOu
 export { ClaudeBrainProvider, GeminiBrainProvider, OpenAIBrainProvider, RuleBrainProvider } from "./providers.ts";
 export { ContextBuilder } from "./context-builder.ts";
 export { PROMPT_VERSIONS, PromptBuilder } from "./prompt-builder.ts";
-export { BRAIN_OUTPUT_FIELDS, BRAIN_OUTPUT_JSON_SCHEMA, parseBrainOutput, validateBrainEvaluation } from "./schema.ts";
+export { BRAIN_OUTPUT_FIELDS, BRAIN_OUTPUT_JSON_SCHEMA, formatConfidencePercent, normalizeConfidencePercent, parseBrainOutput, validateBrainEvaluation } from "./schema.ts";
 
 export const BRAIN_OPTIONS: ReadonlyArray<{ id: BrainMode; label: string }> = [
   { id: "auto", label: "Auto" },

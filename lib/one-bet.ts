@@ -3,6 +3,7 @@ export type OneBet = {
   successProbability: number;
   expectedReturn: 1 | 2 | 3 | 4 | 5;
   feedbackCycle: string;
+  abandonCost: string;
   whyOnly: string;
 };
 
@@ -14,6 +15,7 @@ export function emptyOneBet(): OneBet {
     successProbability: 0,
     expectedReturn: 3,
     feedbackCycle: "",
+    abandonCost: "",
     whyOnly: "",
   };
 }
@@ -40,8 +42,23 @@ export function normalizeOneBet(value: unknown, action = ""): OneBet {
     successProbability: probability,
     expectedReturn,
     feedbackCycle: typeof source.feedbackCycle === "string" ? source.feedbackCycle : "",
+    abandonCost: typeof source.abandonCost === "string" ? source.abandonCost : "",
     whyOnly: typeof source.whyOnly === "string" ? source.whyOnly : "",
   };
+}
+
+export function suggestAbandonCost(action: string): string {
+  const text = action.trim() || "今天的行动";
+  if (/客户|销售|联系|访谈|用户|英国/.test(text)) {
+    return "今天不联系客户，将至少延迟 3 天获得真实市场反馈。";
+  }
+  if (/内容|发布|文章|视频|写/.test(text)) {
+    return "今天不发布，将至少延迟 2 天获得读者真实反应。";
+  }
+  if (/产品|开发|功能|上线|测试/.test(text)) {
+    return "今天不上线验证，将至少延迟 3 天获得用户使用证据。";
+  }
+  return `今天不做“${clipBetAction(text)}”，将延迟获得可验证反馈，并让其它低确定性事项继续占用注意力。`;
 }
 
 export function suggestOneBet(goal: string, action = ""): OneBet {
@@ -54,7 +71,8 @@ export function suggestOneBet(goal: string, action = ""): OneBet {
       successProbability: 72,
       expectedReturn: 5,
       feedbackCycle: "今天至 48 小时内",
-      whyOnly: "只有真实客户反馈能降低最大不确定性；其它准备、优化和内部讨论都不能今天被验证，所以今天只押这一注。",
+      abandonCost: suggestAbandonCost(text || "联系客户"),
+      whyOnly: "只有真实客户反馈能降低最大不确定性，所以今天只押这一注。",
     };
   }
 
@@ -64,7 +82,8 @@ export function suggestOneBet(goal: string, action = ""): OneBet {
       successProbability: 68,
       expectedReturn: 4,
       feedbackCycle: "24 小时内",
-      whyOnly: "内容只有发布后才产生证据；打磨文案或规划选题都无法今天验证，所以放弃其它事项，只做这一次可回收反馈的发布。",
+      abandonCost: suggestAbandonCost(text || "发布内容"),
+      whyOnly: "内容只有发布后才产生证据，所以今天只做这一次可回收反馈的发布。",
     };
   }
 
@@ -74,7 +93,8 @@ export function suggestOneBet(goal: string, action = ""): OneBet {
       successProbability: 65,
       expectedReturn: 5,
       feedbackCycle: "今天至 72 小时内",
-      whyOnly: "最小可验证交付比继续规划和扩功能更能推动目标；今天其它任务都应让路给这一次外部证据。",
+      abandonCost: suggestAbandonCost(text || "上线验证"),
+      whyOnly: "最小可验证交付比继续规划更能推动目标，所以今天只押这一注。",
     };
   }
 
@@ -83,7 +103,8 @@ export function suggestOneBet(goal: string, action = ""): OneBet {
     successProbability: 60,
     expectedReturn: 3,
     feedbackCycle: "今天结束前",
-    whyOnly: `这是最直接推进“${goalText}”且今天能得到验证的一注；其它事情要么不可验证，要么不能今天改变结果，因此全部延后。`,
+    abandonCost: suggestAbandonCost(text || "今日交付"),
+    whyOnly: `这是最直接推进“${goalText}”且今天能验证的一注。`,
   };
 }
 
@@ -96,6 +117,7 @@ export function ensureOneBet(goal: string, action: string, current?: Partial<One
     successProbability: normalized.successProbability > 0 ? normalized.successProbability : suggested.successProbability,
     expectedReturn: normalized.expectedReturn,
     feedbackCycle: normalized.feedbackCycle.trim() || suggested.feedbackCycle,
+    abandonCost: normalized.abandonCost.trim() || suggested.abandonCost,
     whyOnly: normalized.whyOnly.trim() || suggested.whyOnly,
   };
 }
