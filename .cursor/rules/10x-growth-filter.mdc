@@ -1,0 +1,20 @@
+---
+description: Only implement features that pass the 10× growth filter for compounding progress
+alwaysApply: true
+---
+
+# 10× Growth Filter
+
+Leverage OS exists to help users achieve 10 years of progress in 1 year.
+
+Before implementing any feature, ask:
+
+1. Does it improve decision quality?
+2. Does it increase execution speed?
+3. Does it accelerate learning?
+4. Does it create reusable leverage?
+5. Does it reduce opportunity cost?
+
+If the answer is "no" to all five, do not implement the feature.
+
+Always optimize for compounding, not activity.

@@ -3,6 +3,7 @@ import { readFile } from "node:fs/promises";
 import test from "node:test";
 import { decisionEngine } from "../lib/decision-engine.ts";
 import { generateAssetDrafts } from "../lib/asset-drafts.ts";
+import { formatFutureValue, suggestCompound } from "../lib/compound-engine.ts";
 import { explainIncompleteDecision, generateWeeklyDecisionReport } from "../lib/decision-memory.ts";
 import { LATEST_STORAGE_VERSION, STORAGE_BACKUP_PREFIX, STORAGE_KEY, loadStoredState, migrateStoredState } from "../lib/storage.ts";
 import { BRAIN_OPTIONS, ContextBuilder, OpenAIBrainProvider, PROMPT_VERSIONS, PromptBuilder, RuleBrainProvider, createBrain, parseBrainOutput } from "../lib/brain/index.ts";
@@ -48,15 +49,39 @@ test("keeps device-dependent values out of the initial render", async () => {
 
 test("implements Leave Behind with editable AI asset drafts", async () => {
   const page = await readFile(new URL("../app/page.tsx", import.meta.url), "utf8");
-  const drafts = generateAssetDrafts("获得 100 位客户", "完成 3 次客户访谈");
+  const drafts = generateAssetDrafts("获得 100 位客户", "完成 3 次客户访谈", "客户洞察模板");
 
   assert.match(page, /05 · LEAVE BEHIND/);
-  assert.deepEqual(drafts.map((draft) => draft.type), ["SOP", "Prompt", "Customer Insight", "Decision Principle"]);
+  assert.deepEqual(drafts.map((draft) => draft.type), ["SOP", "Prompt", "Template", "Knowledge Base"]);
   assert.ok(drafts.every((draft) => draft.content.includes("完成 3 次客户访谈")));
+  assert.ok(drafts.every((draft) => draft.title.includes("客户洞察模板")));
   assert.match(page, /Preview/);
   assert.match(page, /Edit/);
   assert.match(page, /Saved ✓/);
   assert.match(page, /保存资产并继续/);
+});
+
+test("implements Compound Engine on Step 4 with generate-assets action", async () => {
+  const [page, css] = await Promise.all([
+    readFile(new URL("../app/page.tsx", import.meta.url), "utf8"),
+    readFile(new URL("../app/globals.css", import.meta.url), "utf8"),
+  ]);
+  const proposal = suggestCompound("完成 3 次客户访谈");
+
+  assert.match(page, /04 · COMPOUND ENGINE/);
+  assert.match(page, /如何把今天的成果变成长期资产？/);
+  assert.match(page, /AI 帮助你把今天的工作沉淀为未来可重复使用的资产。/);
+  assert.match(page, /【资产】/);
+  assert.match(page, /【为什么】/);
+  assert.match(page, /【下一步】/);
+  assert.match(page, /【未来价值】/);
+  assert.match(page, /生成资产/);
+  assert.match(page, /generateCompoundAssets/);
+  assert.match(css, /\.compound-grid/);
+  assert.equal(proposal.asset, "客户洞察模板");
+  assert.equal(proposal.futureValue, 5);
+  assert.equal(formatFutureValue(5), "★★★★★");
+  assert.equal(formatFutureValue(3), "★★★☆☆");
 });
 
 test("implements Daily Review with all three saved prompts", async () => {

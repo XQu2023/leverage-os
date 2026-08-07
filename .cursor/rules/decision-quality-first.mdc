@@ -1,0 +1,16 @@
+---
+description: Prefer decision quality, reusable assets, and simple UI-preserving changes
+alwaysApply: true
+---
+
+# Decision Quality First
+
+When proposing a feature or implementation:
+
+1. Prefer improving decision quality over adding new features.
+2. Prefer reusable assets over one-time outputs.
+3. Prefer reducing uncertainty over increasing activity.
+4. Prefer measurable outcomes over generic advice.
+5. Prefer simple implementations that preserve the current UI.
+6. If a change increases complexity, explain why the additional complexity is justified.
+7. Before finishing, explain how this change makes Leverage OS a better Decision Operating System.

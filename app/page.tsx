@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { BRAIN_OPTIONS, ContextBuilder, createBrain, type BrainMode, type BrainOutput, type BrainProviderId, type BrainTrace } from "@/lib/brain";
 import { generateAssetDrafts, type AssetDraft } from "@/lib/asset-drafts";
+import { formatFutureValue, suggestCompound, type CompoundProposal } from "@/lib/compound-engine";
 import { explainIncompleteDecision, generateWeeklyDecisionReport, type DecisionChoice, type DecisionHistoryEntry, type WeeklyDecisionReport } from "@/lib/decision-memory";
 import { LATEST_STORAGE_VERSION, STORAGE_KEY, loadStoredState } from "@/lib/storage";
 
@@ -30,6 +31,7 @@ type State = {
   goal: string;
   action: string;
   multiplier: string;
+  compound: CompoundProposal;
   completed: boolean;
   assets: string[];
   selectedAssets: string[];
@@ -49,11 +51,14 @@ type State = {
   nextTimeChange: string;
 };
 
+const emptyCompound: CompoundProposal = { asset: "", why: "", nextStep: "", futureValue: 3 };
+
 const initialState: State = {
   storageVersion: LATEST_STORAGE_VERSION,
   goal: "",
   action: "",
   multiplier: "",
+  compound: emptyCompound,
   completed: false,
   assets: [],
   selectedAssets: [],
@@ -73,21 +78,29 @@ const initialState: State = {
   nextTimeChange: "",
 };
 
-function suggestMultiplier(action: string) {
-  if (/客户|销售|联系|访谈|用户/.test(action)) return "把一次对话变成可复用的客户洞察模板";
-  if (/内容|发布|文章|视频|写/.test(action)) return "设计一个可持续复用的发布流程";
-  if (/产品|开发|功能|上线|测试/.test(action)) return "先交付最小版本，用真实反馈放大下一步";
-  return "完成后提炼模板，让这次成果可以被重复使用";
+function ensureCompound(action: string, current?: Partial<CompoundProposal> | null): CompoundProposal {
+  const suggested = suggestCompound(action);
+  if (current?.asset?.trim()) {
+    return {
+      asset: current.asset,
+      why: current.why?.trim() || suggested.why,
+      nextStep: current.nextStep?.trim() || suggested.nextStep,
+      futureValue: ([1, 2, 3, 4, 5] as const).includes(current.futureValue as 1 | 2 | 3 | 4 | 5)
+        ? current.futureValue as 1 | 2 | 3 | 4 | 5
+        : suggested.futureValue,
+    };
+  }
+  return suggested;
 }
 
 function suggestAssets(action: string) {
   const context = /客户|销售|联系|访谈|用户/.test(action)
-    ? ["客户跟进 SOP", "客户访谈 Prompt", "客户案例", "客户决策原则"]
+    ? ["客户跟进 SOP", "客户访谈 Prompt", "客户洞察 Template", "客户 Knowledge Base"]
     : /内容|发布|文章|视频|写/.test(action)
-      ? ["内容发布 SOP", "内容生成 Prompt", "内容案例", "选题决策原则"]
+      ? ["内容发布 SOP", "内容生成 Prompt", "内容 Template", "内容 Knowledge Base"]
       : /产品|开发|功能|上线|测试/.test(action)
-        ? ["产品发布 SOP", "产品测试 Prompt", "用户案例", "产品决策原则"]
-        : ["执行 SOP", "复用 Prompt", "客户案例", "决策原则"];
+        ? ["产品发布 SOP", "产品测试 Prompt", "产品 Template", "产品 Knowledge Base"]
+        : ["执行 SOP", "复用 Prompt", "执行 Template", "执行 Knowledge Base"];
   return context;
 }
 
@@ -112,7 +125,8 @@ export default function Home() {
       const stored = loadStoredState(window.localStorage, initialState);
       const assets = suggestAssets(stored.action);
       const selectedAssets = stored.selectedAssets.filter((asset) => typeof asset === "string");
-      setData({ ...stored, assets, selectedAssets });
+      const compound = ensureCompound(stored.action, stored.compound ?? { asset: stored.multiplier });
+      setData({ ...stored, assets, selectedAssets, compound, multiplier: compound.asset || stored.multiplier });
     } finally {
       setHydrated(true);
     }
@@ -161,17 +175,36 @@ export default function Home() {
   const progress = Math.round(((step - 1) / 5) * 100);
   const update = (patch: Partial<State>) => setData((current) => ({ ...current, ...patch }));
 
+  function applyCompound(action: string, current?: Partial<CompoundProposal> | null) {
+    const compound = ensureCompound(action, current);
+    return { compound, multiplier: compound.asset };
+  }
+
   function goToStep(nextStep: number) {
+    if (nextStep === 4 && !data.compound.asset.trim()) {
+      update(applyCompound(data.action, data.compound));
+    }
     if (nextStep === 5 && data.assetDrafts.length !== 4) {
       const assets = suggestAssets(data.action);
-      update({ assets, assetDrafts: generateAssetDrafts(data.goal, data.action) });
+      const compound = ensureCompound(data.action, data.compound);
+      update({ assets, assetDrafts: generateAssetDrafts(data.goal, data.action, compound.asset), ...applyCompound(data.action, compound) });
     }
     setStep(nextStep);
   }
 
   function next() {
-    if (step === 2 && !data.multiplier) update({ multiplier: suggestMultiplier(data.action) });
+    if (step === 2 && !data.compound.asset.trim()) update(applyCompound(data.action));
     goToStep(Math.min(6, step + 1));
+  }
+
+  function generateCompoundAssets() {
+    const compound = ensureCompound(data.action, data.compound);
+    const assets = suggestAssets(data.action);
+    update({
+      ...applyCompound(data.action, compound),
+      assets,
+      assetDrafts: generateAssetDrafts(data.goal, data.action, compound.asset),
+    });
   }
 
   function chooseAiPath(choice: Exclude<AiChoice, null>) {
@@ -208,8 +241,13 @@ export default function Home() {
     const decisionHistory = data.activeDecisionId
       ? data.decisionHistory.map((item) => item.id === id ? entry : item)
       : [entry, ...data.decisionHistory];
-    update({ aiChoice: choice, action, multiplier: suggestMultiplier(action), activeDecisionId: id, decisionHistory });
-    goToStep(4);
+    update({ aiChoice: choice, action, ...applyCompound(action), activeDecisionId: id, decisionHistory });
+    setStep(4);
+  }
+
+  function updateCompound(patch: Partial<CompoundProposal>) {
+    const compound = { ...data.compound, ...patch };
+    update({ compound, multiplier: compound.asset });
   }
 
   function updateAssetDraft(id: string, patch: Partial<AssetDraft>) {
@@ -288,7 +326,7 @@ export default function Home() {
         </header>
 
         <div className="content">
-          {view === "assets" && <LibraryView title="留下的资产" kicker="ASSET LIBRARY" empty="完成今日流程后，保存的 SOP、Prompt、案例与决策原则会出现在这里。" onBack={openToday}>
+          {view === "assets" && <LibraryView title="留下的资产" kicker="ASSET LIBRARY" empty="完成今日流程后，保存的 SOP、Prompt、Template 与 Knowledge Base 会出现在这里。" onBack={openToday}>
             {selectedAsset ? <DetailCard label="SAVED ASSET" title={selectedAsset} onBack={() => setSelectedAsset(null)}>
               <p>这是你在今日工作中选择保留的可复用资产。它保存在当前设备的私人空间中。</p>
               {data.action && <><span className="detail-label">来源行动</span><p>{data.action}</p></>}
@@ -303,7 +341,7 @@ export default function Home() {
 
           {view === "today" && <>
           <div className="stepper" aria-label="今日流程">
-            {["年度目标", "最高杠杆", "AI 判断", "今日乘数", "留下资产", "日回顾"].map((label, index) => (
+            {["年度目标", "最高杠杆", "AI 判断", "复利引擎", "留下资产", "日回顾"].map((label, index) => (
               <button key={label} className={step === index + 1 ? "current" : step > index + 1 ? "done" : ""} onClick={() => step > index + 1 && goToStep(index + 1)}>
                 <span>{step > index + 1 ? "✓" : index + 1}</span><small>{label}</small>
               </button>
@@ -346,11 +384,16 @@ export default function Home() {
             </>}
 
             {step === 4 && <>
-              <p className="kicker">04 · TODAY&apos;S MULTIPLIER</p>
-              <h2>怎样让今天的成果不只发生一次？</h2>
-              <p className="lead">AI 根据你的行动找到一个最简单的放大方式。你可以直接修改。</p>
-              <div className="ai-proposal"><span className="spark">✦</span><div><small>AI 建议的乘数</small><textarea value={data.multiplier} onChange={(e) => update({ multiplier: e.target.value })} /></div></div>
-              <p className="why">这会把一次性的努力，转化为下一次可以直接调用的起点。</p>
+              <p className="kicker">04 · COMPOUND ENGINE</p>
+              <h2>如何把今天的成果变成长期资产？</h2>
+              <p className="lead">AI 帮助你把今天的工作沉淀为未来可重复使用的资产。</p>
+              <div className="ai-proposal"><span className="spark">✦</span><div><small>【资产】</small><textarea value={data.compound.asset} onChange={(e) => updateCompound({ asset: e.target.value })} placeholder="例如：客户洞察模板" /></div></div>
+              <div className="compound-grid">
+                <div><span>◎</span><p><strong>【为什么】</strong><textarea value={data.compound.why} onChange={(e) => updateCompound({ why: e.target.value })} placeholder="为什么它值得保存。" /></p></div>
+                <div><span>→</span><p><strong>【下一步】</strong><textarea value={data.compound.nextStep} onChange={(e) => updateCompound({ nextStep: e.target.value })} placeholder="今天立即完成的一个动作。" /></p></div>
+                <div className="future-value"><span>★</span><p><strong>【未来价值】</strong><em aria-label={`未来价值 ${data.compound.futureValue} 星`}>{formatFutureValue(data.compound.futureValue)}</em><span className="star-picker">{([1, 2, 3, 4, 5] as const).map((value) => <button type="button" key={value} className={data.compound.futureValue >= value ? "active" : ""} onClick={() => updateCompound({ futureValue: value })} aria-label={`${value} 星`}>★</button>)}</span></p></div>
+              </div>
+              {data.assetDrafts.length === 4 && <p className="selection-status">已生成 SOP、Prompt、Template、Knowledge Base。可继续保存为长期资产。</p>}
             </>}
 
             {step === 5 && <>
@@ -372,10 +415,10 @@ export default function Home() {
                 <div className="completion-mark">{data.completionResult === "completed" ? "✓" : data.completionResult === "partial" ? "◐" : "×"}</div><h3>Daily review saved</h3><p>结果：{completionLabel(data.completionResult)}。你留下了 {data.selectedAssets.length} 项可复用资产。</p>
                 <div className="summary-row"><span>行动</span><strong>{data.action}</strong></div><div className="summary-row"><span>乘数</span><strong>{data.multiplier}</strong></div>
                 {data.completionResult !== "completed" && data.activeDecisionId && (() => { const entry = data.decisionHistory.find((item) => item.id === data.activeDecisionId); return entry ? <div className="incomplete-guidance"><strong>AI explanation</strong><p>{entry.aiExplanation}</p><strong>Tomorrow&apos;s recommendation</strong><p>{entry.tomorrowRecommendation}</p></div> : null; })()}
-                <button className="secondary" onClick={() => { update({ action: "", multiplier: "", completed: false, assets: [], selectedAssets: [], biggestWaste: "", bestAsset: "", tomorrowFocus: "", predictionResult: null, wrongAssumption: "", nextTimeChange: "", aiChoice: null, activeDecisionId: null, assetDrafts: [], completionResult: null }); setStep(2); }}>开始新的一天 →</button>
+                <button className="secondary" onClick={() => { update({ action: "", multiplier: "", compound: emptyCompound, completed: false, assets: [], selectedAssets: [], biggestWaste: "", bestAsset: "", tomorrowFocus: "", predictionResult: null, wrongAssumption: "", nextTimeChange: "", aiChoice: null, activeDecisionId: null, assetDrafts: [], completionResult: null }); setStep(2); }}>开始新的一天 →</button>
               </div> : <div className="review-form">
                 <label><span>Biggest Waste</span><strong>今天最大的浪费是什么？</strong><textarea value={data.biggestWaste} onChange={(e) => update({ biggestWaste: e.target.value })} placeholder="以后可以删除、委派或自动化什么？" /></label>
-                <label><span>Best Asset Created</span><strong>今天留下的最佳资产是什么？</strong><textarea value={data.bestAsset} onChange={(e) => update({ bestAsset: e.target.value })} placeholder="SOP、Prompt、案例或决策原则…" /></label>
+                <label><span>Best Asset Created</span><strong>今天留下的最佳资产是什么？</strong><textarea value={data.bestAsset} onChange={(e) => update({ bestAsset: e.target.value })} placeholder="SOP、Prompt、Template 或 Knowledge Base…" /></label>
                 <label><span>Tomorrow&apos;s One Focus</span><strong>明天唯一的重点是什么？</strong><textarea value={data.tomorrowFocus} onChange={(e) => update({ tomorrowFocus: e.target.value })} placeholder="只写一个最值得推进的结果…" /></label>
                 <fieldset className="prediction-review"><legend>Did the prediction happen?</legend><div>{(["happened", "partial", "did-not-happen"] as const).map((result) => <button type="button" key={result} className={data.predictionResult === result ? "active" : ""} onClick={() => update({ predictionResult: result })}>{predictionResultLabel(result)}</button>)}</div></fieldset>
                 <label><span>Wrong Assumption</span><strong>哪个假设错了？</strong><textarea value={data.wrongAssumption} onChange={(e) => update({ wrongAssumption: e.target.value })} placeholder="写下事实推翻了哪个假设…" /></label>
@@ -385,7 +428,7 @@ export default function Home() {
 
             {!data.completed && <div className="actions">
               {step > 1 && <button className="back" onClick={() => setStep(step - 1)}>← 返回</button>}
-              {step === 3 ? <><button className="secondary" disabled={!judgment} onClick={() => chooseAiPath("keep-plan")}>Keep My Plan</button><button className="primary" disabled={!judgment} onClick={() => chooseAiPath("follow-ai")}>Follow AI<span>→</span></button></> : step === 6 ? <div className="completion-actions"><button disabled={!canSaveReview} onClick={() => saveReview("failed")}>Failed</button><button disabled={!canSaveReview} onClick={() => saveReview("partial")}>Partial</button><button className="primary" disabled={!canSaveReview} onClick={() => saveReview("completed")}>Completed<span>→</span></button></div> : <button className="primary" disabled={!canContinue || (step === 5 && data.assetDrafts.every((draft) => draft.status !== "saved"))} onClick={next}>{step === 5 ? "保存资产并继续" : "继续"}<span>→</span></button>}
+              {step === 3 ? <><button className="secondary" disabled={!judgment} onClick={() => chooseAiPath("keep-plan")}>Keep My Plan</button><button className="primary" disabled={!judgment} onClick={() => chooseAiPath("follow-ai")}>Follow AI<span>→</span></button></> : step === 4 ? <><button className="secondary" onClick={generateCompoundAssets}>生成资产</button><button className="primary" disabled={!data.compound.asset.trim()} onClick={next}>继续<span>→</span></button></> : step === 6 ? <div className="completion-actions"><button disabled={!canSaveReview} onClick={() => saveReview("failed")}>Failed</button><button disabled={!canSaveReview} onClick={() => saveReview("partial")}>Partial</button><button className="primary" disabled={!canSaveReview} onClick={() => saveReview("completed")}>Completed<span>→</span></button></div> : <button className="primary" disabled={!canContinue || (step === 5 && data.assetDrafts.every((draft) => draft.status !== "saved"))} onClick={next}>{step === 5 ? "保存资产并继续" : "继续"}<span>→</span></button>}
             </div>}
           </div>
           </>}

@@ -1,0 +1,16 @@
+---
+description: Challenge features that do not improve decisions, execution, learning, assets, or compounding
+alwaysApply: true
+---
+
+# Feature Value Filter
+
+Every feature must help users do at least one of:
+
+1. Make better decisions.
+2. Execute faster.
+3. Learn faster.
+4. Build reusable assets.
+5. Compound results over time.
+
+If it does none of these, challenge the implementation before writing code. Explain the gap against `PROJECT.md` and ask whether to proceed or reshape the request.

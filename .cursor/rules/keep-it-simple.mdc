@@ -1,0 +1,13 @@
+---
+description: Prefer simplest implementations that optimize for learning speed during validation
+alwaysApply: true
+---
+
+# Keep It Simple
+
+This is a product in active validation.
+
+- Prefer the simplest implementation that solves the problem.
+- Do not introduce abstractions, frameworks, or architecture unless they clearly reduce future complexity.
+- Optimize for learning speed, not engineering perfection.
+- If a solution can be implemented in 50 lines instead of 500, prefer the smaller solution.

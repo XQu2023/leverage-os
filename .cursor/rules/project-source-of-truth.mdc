@@ -1,0 +1,13 @@
+---
+description: Use PROJECT.md as the source of truth for product direction before implementing
+alwaysApply: true
+---
+
+# PROJECT.md Source of Truth
+
+Before making implementation decisions, always read `PROJECT.md`.
+
+- Treat `PROJECT.md` as the source of truth for product direction (mission, vision, philosophy, success metric, current focus, next sprint).
+- Align features, UX, and technical choices with that direction.
+- If a requested change conflicts with `PROJECT.md`, explain the conflict clearly and wait for confirmation before implementing.
+- Prefer decisions that reinforce Better decisions > More work, Assets > Tasks, Validation > Planning, Cashflow > Vanity, Learning > Busyness, and Compounding > Linear Growth.
