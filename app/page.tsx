@@ -7,6 +7,7 @@ import { emptyBusinessProfile, normalizeBusinessProfile, refreshBusinessProfile,
 import { formatFutureValue, suggestCompound, type CompoundProposal } from "@/lib/compound-engine";
 import { explainIncompleteDecision, generateWeeklyDecisionReport, type DecisionChoice, type DecisionHistoryEntry, type WeeklyDecisionReport } from "@/lib/decision-memory";
 import { formatLessonSummary, generateDecisionLesson, outcomeFromCompletion, outcomeLabel, type DecisionRating } from "@/lib/decision-quality";
+import { ONE_BET_ACTION_MAX, clipBetAction, emptyOneBet, ensureOneBet, formatExpectedReturn, normalizeOneBet, type OneBet } from "@/lib/one-bet";
 import { LATEST_STORAGE_VERSION, STORAGE_KEY, loadStoredState } from "@/lib/storage";
 
 type Review = {
@@ -58,6 +59,7 @@ type State = {
   nextTimeChange: string;
   decisionRating: DecisionRating | null;
   decisionAdopted: boolean | null;
+  oneBet: OneBet;
 };
 
 const emptyCompound: CompoundProposal = { asset: "", why: "", nextStep: "", futureValue: 3 };
@@ -88,6 +90,7 @@ const initialState: State = {
   nextTimeChange: "",
   decisionRating: null,
   decisionAdopted: null,
+  oneBet: emptyOneBet(),
 };
 
 function ensureCompound(action: string, current?: Partial<CompoundProposal> | null): CompoundProposal {
@@ -138,11 +141,12 @@ export default function Home() {
       const assets = suggestAssets(stored.action);
       const selectedAssets = stored.selectedAssets.filter((asset) => typeof asset === "string");
       const compound = ensureCompound(stored.action, stored.compound ?? { asset: stored.multiplier });
+      const oneBet = ensureOneBet(stored.goal, stored.action, normalizeOneBet(stored.oneBet, stored.action));
       const businessProfile = refreshBusinessProfile(
         normalizeBusinessProfile(stored.businessProfile, stored.goal),
         { goal: stored.goal, decisionHistory: stored.decisionHistory, reviews: stored.reviews, selectedAssets, assetDrafts: stored.assetDrafts },
       );
-      setData({ ...stored, assets, selectedAssets, compound, multiplier: compound.asset || stored.multiplier, businessProfile });
+      setData({ ...stored, assets, selectedAssets, compound, multiplier: compound.asset || stored.multiplier, businessProfile, oneBet, action: oneBet.action || stored.action });
     } finally {
       setHydrated(true);
     }
@@ -267,13 +271,25 @@ export default function Home() {
     const decisionHistory = data.activeDecisionId
       ? data.decisionHistory.map((item) => item.id === id ? entry : item)
       : [entry, ...data.decisionHistory];
-    update({ aiChoice: choice, action, ...applyCompound(action), activeDecisionId: id, decisionHistory, decisionAdopted: choice === "follow-ai" });
+    const oneBet = ensureOneBet(data.goal, action, { ...data.oneBet, action: clipBetAction(action) });
+    update({ aiChoice: choice, action: oneBet.action, oneBet, ...applyCompound(oneBet.action), activeDecisionId: id, decisionHistory, decisionAdopted: choice === "follow-ai" });
     setStep(4);
   }
 
   function updateCompound(patch: Partial<CompoundProposal>) {
     const compound = { ...data.compound, ...patch };
     update({ compound, multiplier: compound.asset });
+  }
+
+  function updateOneBet(patch: Partial<OneBet>) {
+    if (patch.action !== undefined) {
+      const action = clipBetAction(patch.action);
+      const oneBet = ensureOneBet(data.goal, action, { ...data.oneBet, ...patch, action });
+      update({ oneBet, action: oneBet.action, aiChoice: null, activeDecisionId: null });
+      return;
+    }
+    const oneBet = { ...data.oneBet, ...patch };
+    update({ oneBet, action: oneBet.action, aiChoice: null, activeDecisionId: null });
   }
 
   function updateBusinessProfile(patch: Partial<BusinessProfile>) {
@@ -322,7 +338,7 @@ export default function Home() {
     update({ reviews: [review, ...data.reviews], decisionHistory, completionResult: completionStatus, completed: true, predictionResult });
   }
 
-  const canContinue = step === 1 ? data.goal.trim().length > 8 : step === 2 ? data.action.trim().length > 5 : true;
+  const canContinue = step === 1 ? data.goal.trim().length > 8 : step === 2 ? data.oneBet.action.trim().length > 0 && data.oneBet.action.trim().length <= ONE_BET_ACTION_MAX : true;
   const canSaveReview = Boolean(data.biggestWaste.trim() && data.bestAsset.trim() && data.tomorrowFocus.trim() && data.predictionResult && data.wrongAssumption.trim() && data.nextTimeChange.trim() && data.decisionRating && data.decisionAdopted !== null);
   const draftResult = data.predictionResult === "happened" ? "success" as const : data.predictionResult === "partial" ? "partial-success" as const : data.predictionResult === "did-not-happen" ? "failed" as const : null;
   const draftLesson = data.decisionRating && data.decisionAdopted !== null && draftResult && data.wrongAssumption.trim() && data.nextTimeChange.trim()
@@ -432,7 +448,13 @@ export default function Home() {
               <p className="kicker">02 · TODAY&apos;S HIGHEST LEVERAGE ACTION</p>
               <h2>今天哪一个行动，最能推动这个目标？</h2>
               <div className="goal-context"><span>一年目标</span><p>{data.goal}</p></div>
-              <textarea className="hero-input" value={data.action} onChange={(e) => update({ action: e.target.value, aiChoice: null, activeDecisionId: null })} placeholder="写下一个今天可以完成、会产生真实结果的行动…" autoFocus />
+              <div className="ai-proposal one-bet-card"><span className="spark">✦</span><div><small>【今天唯一行动】</small><textarea value={data.oneBet.action} onChange={(e) => updateOneBet({ action: e.target.value })} placeholder="立即联系20家英国客户，验证真实需求。" maxLength={ONE_BET_ACTION_MAX} autoFocus /><p className="char-count">{Array.from(data.oneBet.action).length}/{ONE_BET_ACTION_MAX}</p></div></div>
+              <div className="compound-grid one-bet-metrics">
+                <div><span>%</span><p><strong>成功概率</strong><input type="number" min={1} max={100} value={data.oneBet.successProbability || ""} onChange={(e) => updateOneBet({ successProbability: Math.min(100, Math.max(0, Number(e.target.value) || 0)) })} placeholder="72" /><small>预计成功概率（%）</small></p></div>
+                <div className="future-value"><span>★</span><p><strong>预计收益</strong><em aria-label={`预计收益 ${data.oneBet.expectedReturn} 星`}>{formatExpectedReturn(data.oneBet.expectedReturn)}</em><span className="star-picker">{([1, 2, 3, 4, 5] as const).map((value) => <button type="button" key={value} className={data.oneBet.expectedReturn >= value ? "active" : ""} onClick={() => updateOneBet({ expectedReturn: value })} aria-label={`${value} 星`}>★</button>)}</span></p></div>
+                <div><span>⏱</span><p><strong>反馈周期</strong><textarea value={data.oneBet.feedbackCycle} onChange={(e) => updateOneBet({ feedbackCycle: e.target.value })} placeholder="今天至 48 小时内" /><small>预计多久得到验证</small></p></div>
+              </div>
+              <div className="why-only"><small>【为什么这是今天唯一值得做的事？】</small><textarea value={data.oneBet.whyOnly} onChange={(e) => updateOneBet({ whyOnly: e.target.value })} placeholder="解释为什么放弃其它事情，只押这一注。" /></div>
               <div className="constraint"><span>1</span><p><strong>只选一个</strong><br />不是待办清单，而是今天最重要的下注。</p></div>
             </>}
 
@@ -487,7 +509,7 @@ export default function Home() {
                 <div className="summary-row"><span>行动</span><strong>{data.action}</strong></div><div className="summary-row"><span>乘数</span><strong>{data.multiplier}</strong></div>
                 {data.activeDecisionId && (() => { const entry = data.decisionHistory.find((item) => item.id === data.activeDecisionId); return entry?.quality ? <div className="incomplete-guidance lesson-summary"><strong>Decision Feedback</strong><p>评分 {entry.quality.rating}/5 · 采纳 {entry.quality.adopted ? "Yes" : "No"} · {outcomeLabel(entry.quality.result)}</p><strong>Lesson</strong><p>{entry.quality.lesson.why}</p><strong>正确假设</strong><p>{entry.quality.lesson.correctAssumption}</p><strong>错误假设</strong><p>{entry.quality.lesson.wrongAssumption}</p><strong>下次调整</strong><p>{entry.quality.lesson.nextAdjustment}</p></div> : null; })()}
                 {data.completionResult !== "completed" && data.activeDecisionId && (() => { const entry = data.decisionHistory.find((item) => item.id === data.activeDecisionId); return entry ? <div className="incomplete-guidance"><strong>AI explanation</strong><p>{entry.aiExplanation}</p><strong>Tomorrow&apos;s recommendation</strong><p>{entry.tomorrowRecommendation}</p></div> : null; })()}
-                <button className="secondary" onClick={() => { update({ action: "", multiplier: "", compound: emptyCompound, completed: false, assets: [], selectedAssets: [], biggestWaste: "", bestAsset: "", tomorrowFocus: "", predictionResult: null, wrongAssumption: "", nextTimeChange: "", decisionRating: null, decisionAdopted: null, aiChoice: null, activeDecisionId: null, assetDrafts: [], completionResult: null }); setStep(2); }}>开始新的一天 →</button>
+                <button className="secondary" onClick={() => { update({ action: "", multiplier: "", compound: emptyCompound, oneBet: emptyOneBet(), completed: false, assets: [], selectedAssets: [], biggestWaste: "", bestAsset: "", tomorrowFocus: "", predictionResult: null, wrongAssumption: "", nextTimeChange: "", decisionRating: null, decisionAdopted: null, aiChoice: null, activeDecisionId: null, assetDrafts: [], completionResult: null }); setStep(2); }}>开始新的一天 →</button>
               </div> : <div className="review-form">
                 <label><span>Biggest Waste</span><strong>今天最大的浪费是什么？</strong><textarea value={data.biggestWaste} onChange={(e) => update({ biggestWaste: e.target.value })} placeholder="以后可以删除、委派或自动化什么？" /></label>
                 <label><span>Best Asset Created</span><strong>今天留下的最佳资产是什么？</strong><textarea value={data.bestAsset} onChange={(e) => update({ bestAsset: e.target.value })} placeholder="SOP、Prompt、Template 或 Knowledge Base…" /></label>

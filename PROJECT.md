@@ -25,4 +25,4 @@ V3
 ## Current Focus
 Build an AI Decision Operating System that learns from daily decisions and helps users create long-term assets.
 ## Next Sprint
-V3.4 Decision Quality Loop
+V3.5 One Bet

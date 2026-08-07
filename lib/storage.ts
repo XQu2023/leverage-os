@@ -1,7 +1,8 @@
 import { normalizeBusinessProfile } from "./business-profile.ts";
 import { normalizeDecisionQuality } from "./decision-quality.ts";
+import { normalizeOneBet } from "./one-bet.ts";
 
-export const LATEST_STORAGE_VERSION = 9 as const;
+export const LATEST_STORAGE_VERSION = 10 as const;
 export const STORAGE_KEY = "leverage-os-v1";
 export const STORAGE_BACKUP_PREFIX = `${STORAGE_KEY}-backup-`;
 
@@ -9,7 +10,7 @@ type StoredRecord = Record<string, unknown> & { storageVersion: number };
 
 export type StorageLike = Pick<Storage, "getItem" | "setItem">;
 
-export function migrateStoredState(value: unknown): StoredRecord & { storageVersion: 9 } {
+export function migrateStoredState(value: unknown): StoredRecord & { storageVersion: 10 } {
   if (!isRecord(value)) throw new Error("Stored state must be an object");
   let state: Record<string, unknown> = { ...value };
   let version = readVersion(state.storageVersion);
@@ -119,15 +120,26 @@ export function migrateStoredState(value: unknown): StoredRecord & { storageVers
     version = 9;
   }
 
+  if (version === 9) {
+    const action = typeof state.action === "string" ? state.action : "";
+    state = {
+      ...state,
+      oneBet: normalizeOneBet(state.oneBet, action),
+      storageVersion: 10,
+    };
+    version = 10;
+  }
+
   if (version !== LATEST_STORAGE_VERSION) throw new Error(`Migration stopped at version ${version}`);
   if (!Array.isArray(state.decisionHistory) || !Array.isArray(state.assetDrafts)) throw new Error("Migrated collections are invalid");
   state.brainProvider = normalizeBrainProvider(state.brainProvider);
   state.brainUsage = normalizeBrainUsage(state.brainUsage);
   state.businessProfile = normalizeBusinessProfile(state.businessProfile, typeof state.goal === "string" ? state.goal : "");
-  return state as StoredRecord & { storageVersion: 9 };
+  state.oneBet = normalizeOneBet(state.oneBet, typeof state.action === "string" ? state.action : "");
+  return state as StoredRecord & { storageVersion: 10 };
 }
 
-export function loadStoredState<T extends { storageVersion: 9 }>(
+export function loadStoredState<T extends { storageVersion: 10 }>(
   storage: StorageLike,
   initialState: T,
   now = Date.now(),

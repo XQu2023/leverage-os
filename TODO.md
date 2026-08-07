@@ -4,6 +4,7 @@
 - [x] Compound Engine
 - [x] Business Memory
 - [x] Decision Quality Loop
+- [x] One Bet
 - [ ] Opportunity Cost Engine
 ## Product
 - [x] Improve AI decision quality
