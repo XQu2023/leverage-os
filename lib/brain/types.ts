@@ -1,4 +1,5 @@
 import type { BusinessProfile } from "../business-profile.ts";
+import type { LearningLoopContext } from "../decision-quality.ts";
 
 export type BrainTask = "decision" | "multiplier" | "asset" | "review";
 
@@ -9,6 +10,9 @@ export type BrainContext = {
   recentDecisionHistory: Array<Record<string, unknown>>;
   recentAssets: Array<Record<string, unknown>>;
   recentReviews: Array<Record<string, unknown>>;
+  recentFeedback: LearningLoopContext["recentFeedback"];
+  recentOutcomes: LearningLoopContext["recentOutcomes"];
+  recentLessons: LearningLoopContext["recentLessons"];
   predictionAccuracy: number;
   recurringMistakes: string[];
   selectedProvider: BrainProviderId;

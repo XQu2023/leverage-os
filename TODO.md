@@ -1,11 +1,12 @@
 # TODO
 ## V3
-- [ ] Decision Ledger
+- [x] Decision Ledger
 - [x] Compound Engine
 - [x] Business Memory
+- [x] Decision Quality Loop
 - [ ] Opportunity Cost Engine
 ## Product
-- [ ] Improve AI decision quality
+- [x] Improve AI decision quality
 - [ ] Reduce response time
 - [x] Make Step 4 create reusable assets
 ## Long Term

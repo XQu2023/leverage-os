@@ -1,4 +1,5 @@
 import { normalizeBusinessProfile, type BusinessProfile } from "../business-profile.ts";
+import { extractLearningLoop, type DecisionQuality } from "../decision-quality.ts";
 import type { BrainContext, BrainProviderId } from "./types.ts";
 
 type ContextSource = {
@@ -11,17 +12,22 @@ type ContextSource = {
   selectedProvider: BrainProviderId;
 };
 
+type LearningEntry = { date?: string; chosenAction?: string; quality?: DecisionQuality | null };
+
 export class ContextBuilder {
-  constructor(privateLimit = 30, resourceLimit = Math.min(privateLimit, 5)) {
+  constructor(privateLimit = 30, resourceLimit = Math.min(privateLimit, 5), learningLimit = 20) {
     this.limit = privateLimit;
     this.resourceLimit = resourceLimit;
+    this.learningLimit = learningLimit;
   }
 
   readonly limit: number;
   readonly resourceLimit: number;
+  readonly learningLimit: number;
 
   build(source: ContextSource): BrainContext {
     const yearlyGoal = source.yearlyGoal.trim();
+    const learning = extractLearningLoop(source.decisionHistory as LearningEntry[], this.learningLimit);
     return {
       yearlyGoal,
       todayAction: source.todayAction.trim(),
@@ -29,6 +35,9 @@ export class ContextBuilder {
       recentDecisionHistory: toRecords(source.decisionHistory, this.limit),
       recentAssets: toRecords(source.assets, this.resourceLimit),
       recentReviews: toRecords(source.reviews, this.resourceLimit),
+      recentFeedback: learning.recentFeedback,
+      recentOutcomes: learning.recentOutcomes,
+      recentLessons: learning.recentLessons,
       predictionAccuracy: predictionAccuracy(source.decisionHistory),
       recurringMistakes: recurringMistakes(source.decisionHistory),
       selectedProvider: source.selectedProvider,

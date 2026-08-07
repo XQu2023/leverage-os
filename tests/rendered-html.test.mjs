@@ -6,6 +6,7 @@ import { generateAssetDrafts } from "../lib/asset-drafts.ts";
 import { deriveBusinessMemory, emptyBusinessProfile, normalizeBusinessProfile, refreshBusinessProfile } from "../lib/business-profile.ts";
 import { formatFutureValue, suggestCompound } from "../lib/compound-engine.ts";
 import { explainIncompleteDecision, generateWeeklyDecisionReport } from "../lib/decision-memory.ts";
+import { extractLearningLoop, formatLessonSummary, generateDecisionLesson, outcomeFromCompletion } from "../lib/decision-quality.ts";
 import { LATEST_STORAGE_VERSION, STORAGE_BACKUP_PREFIX, STORAGE_KEY, loadStoredState, migrateStoredState } from "../lib/storage.ts";
 import { BRAIN_OPTIONS, ContextBuilder, OpenAIBrainProvider, PROMPT_VERSIONS, PromptBuilder, RuleBrainProvider, createBrain, parseBrainOutput } from "../lib/brain/index.ts";
 import { evaluateOpenAIDecision } from "../lib/brain/openai-server.ts";
@@ -94,13 +95,48 @@ test("implements Daily Review with all three saved prompts", async () => {
   assert.match(page, /biggestWaste: data\.biggestWaste/);
   assert.match(page, /bestAsset: data\.bestAsset/);
   assert.match(page, /tomorrowFocus: data\.tomorrowFocus/);
-  assert.match(page, /Completed/);
-  assert.match(page, /Partial/);
+  assert.match(page, /Success/);
+  assert.match(page, /Partial Success/);
   assert.match(page, /Failed/);
   assert.match(page, /Did the prediction happen\?/);
   assert.match(page, /Wrong Assumption/);
   assert.match(page, /Next Time/);
   assert.match(page, /ledger: \{ \.\.\.entry\.ledger/);
+});
+
+test("implements Decision Quality Loop feedback, outcomes, and lessons", async () => {
+  const page = await readFile(new URL("../app/page.tsx", import.meta.url), "utf8");
+  const lesson = generateDecisionLesson({
+    action: "完成访谈",
+    result: "failed",
+    adopted: true,
+    rating: 2,
+    prediction: "收集 3 条反馈",
+    wrongAssumption: "客户会主动回复",
+    nextTimeChange: "先预约再访谈",
+    biggestWaste: "等待回复",
+  });
+  const loop = extractLearningLoop([
+    {
+      date: "2026-08-07T10:00:00.000Z",
+      chosenAction: "完成访谈",
+      quality: { rating: 2, adopted: true, result: "failed", lesson },
+    },
+  ]);
+
+  assert.match(page, /Decision Feedback/);
+  assert.match(page, /是否采纳 AI 建议/);
+  assert.match(page, /decisionRating/);
+  assert.match(page, /decisionAdopted/);
+  assert.match(page, /generateDecisionLesson/);
+  assert.match(page, /AI LESSON/);
+  assert.equal(outcomeFromCompletion("completed"), "success");
+  assert.equal(outcomeFromCompletion("partial"), "partial-success");
+  assert.match(lesson.why, /失败/);
+  assert.match(formatLessonSummary(lesson), /下次调整/);
+  assert.equal(loop.recentFeedback.length, 1);
+  assert.equal(loop.recentOutcomes[0].result, "failed");
+  assert.equal(loop.recentLessons[0].wrongAssumption, "客户会主动回复");
 });
 
 test("links sidebar summaries to accessible asset and review libraries", async () => {
@@ -190,10 +226,18 @@ test("calls browser fetch without binding the provider as its receiver", async (
 });
 
 test("builds bounded provider context from goals, decisions, assets, and reviews", () => {
+  const lesson = generateDecisionLesson({
+    action: "完成访谈", result: "success", adopted: true, rating: 5,
+    wrongAssumption: "无人响应", nextTimeChange: "保持预约流程", biggestWaste: "无",
+  });
   const context = new ContextBuilder(2).build({
     yearlyGoal: " 100 位客户 ", todayAction: " 完成访谈 ", selectedProvider: "openai",
     businessProfile: { ...emptyBusinessProfile(), industry: "SaaS", coreAdvantage: "速度" },
-    decisionHistory: [{ id: 1 }, { id: 2 }, { id: 3 }],
+    decisionHistory: [
+      { id: 1, date: "2026-08-07", chosenAction: "完成访谈", quality: { rating: 5, adopted: true, result: "success", lesson } },
+      { id: 2 },
+      { id: 3 },
+    ],
     assets: [{ id: "a" }, { id: "b" }, { id: "c" }],
     reviews: [{ id: "r1" }],
   });
@@ -205,6 +249,9 @@ test("builds bounded provider context from goals, decisions, assets, and reviews
   assert.equal(context.recentDecisionHistory.length, 2);
   assert.equal(context.recentAssets.length, 2);
   assert.equal(context.recentReviews.length, 1);
+  assert.equal(context.recentFeedback[0].rating, 5);
+  assert.equal(context.recentOutcomes[0].result, "success");
+  assert.equal(context.recentLessons[0].decision, "完成访谈");
   assert.equal(context.selectedProvider, "openai");
 });
 
@@ -286,6 +333,9 @@ test("keeps separate prompt templates for all four Brain tasks", () => {
     assert.match(prompt, new RegExp(`PROMPT_VERSION: ${PROMPT_VERSIONS[task]}`));
     assert.match(prompt, /yearlyGoal/);
     assert.match(prompt, /businessProfile/);
+    assert.match(prompt, /recentFeedback/);
+    assert.match(prompt, /recentOutcomes/);
+    assert.match(prompt, /recentLessons/);
   }
 });
 
@@ -421,6 +471,32 @@ test("migrates V3.2 storage into Business Profile memory", () => {
   assert.equal(migrated.businessProfile.yearlyGoal, "做到 100 万年收入");
   assert.deepEqual(migrated.businessProfile.recentProjects, []);
   assert.equal(migrated.businessProfile.industry, "");
+});
+
+test("migrates V3.3 storage into Decision Quality Loop fields", () => {
+  const migrated = migrateStoredState({
+    storageVersion: 8,
+    goal: "100 位客户",
+    brainProvider: "auto",
+    brainUsage: {},
+    businessProfile: emptyBusinessProfile(),
+    decisionHistory: [{
+      id: "q1",
+      chosenAction: "发布页面",
+      quality: {
+        rating: 4,
+        adopted: false,
+        result: "partial-success",
+        lesson: { why: "部分完成", correctAssumption: "方向对", wrongAssumption: "范围过大", nextAdjustment: "缩小范围" },
+      },
+    }],
+    assetDrafts: [],
+  });
+  assert.equal(migrated.storageVersion, LATEST_STORAGE_VERSION);
+  assert.equal(migrated.decisionRating, null);
+  assert.equal(migrated.decisionAdopted, null);
+  assert.equal(migrated.decisionHistory[0].quality.rating, 4);
+  assert.equal(migrated.decisionHistory[0].quality.result, "partial-success");
 });
 
 test("explains its reasoning and explicitly rejects scores below a configurable threshold", () => {
@@ -580,6 +656,9 @@ function makeBrainInput(selectedProvider = "rules", yearlyGoal = "获得 100 位
       recentDecisionHistory: [],
       recentAssets: [],
       recentReviews: [],
+      recentFeedback: [],
+      recentOutcomes: [],
+      recentLessons: [],
       predictionAccuracy: 0,
       recurringMistakes: [],
       selectedProvider,

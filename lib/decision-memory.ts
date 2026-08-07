@@ -1,3 +1,5 @@
+import type { DecisionQuality } from "./decision-quality.ts";
+
 export type DecisionChoice = "follow-ai" | "keep-plan";
 
 export type DecisionLedger = {
@@ -27,6 +29,7 @@ export type DecisionHistoryEntry = {
   tokenUsage: { inputTokens: number; outputTokens: number; totalTokens: number } | null;
   fallback: boolean;
   ledger: DecisionLedger;
+  quality?: DecisionQuality | null;
   aiExplanation?: string;
   tomorrowRecommendation?: string;
 };

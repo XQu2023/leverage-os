@@ -6,6 +6,7 @@ import { generateAssetDrafts, type AssetDraft } from "@/lib/asset-drafts";
 import { emptyBusinessProfile, normalizeBusinessProfile, refreshBusinessProfile, type BusinessProfile } from "@/lib/business-profile";
 import { formatFutureValue, suggestCompound, type CompoundProposal } from "@/lib/compound-engine";
 import { explainIncompleteDecision, generateWeeklyDecisionReport, type DecisionChoice, type DecisionHistoryEntry, type WeeklyDecisionReport } from "@/lib/decision-memory";
+import { formatLessonSummary, generateDecisionLesson, outcomeFromCompletion, outcomeLabel, type DecisionRating } from "@/lib/decision-quality";
 import { LATEST_STORAGE_VERSION, STORAGE_KEY, loadStoredState } from "@/lib/storage";
 
 type Review = {
@@ -18,6 +19,10 @@ type Review = {
   predictionResult: "happened" | "partial" | "did-not-happen";
   wrongAssumption: string;
   nextTimeChange: string;
+  rating?: DecisionRating;
+  adopted?: boolean;
+  result?: "success" | "partial-success" | "failed";
+  lesson?: { why: string; correctAssumption: string; wrongAssumption: string; nextAdjustment: string };
 };
 
 type View = "today" | "assets" | "reviews" | "weekly" | "profile";
@@ -51,6 +56,8 @@ type State = {
   predictionResult: "happened" | "partial" | "did-not-happen" | null;
   wrongAssumption: string;
   nextTimeChange: string;
+  decisionRating: DecisionRating | null;
+  decisionAdopted: boolean | null;
 };
 
 const emptyCompound: CompoundProposal = { asset: "", why: "", nextStep: "", futureValue: 3 };
@@ -79,6 +86,8 @@ const initialState: State = {
   predictionResult: null,
   wrongAssumption: "",
   nextTimeChange: "",
+  decisionRating: null,
+  decisionAdopted: null,
 };
 
 function ensureCompound(action: string, current?: Partial<CompoundProposal> | null): CompoundProposal {
@@ -258,7 +267,7 @@ export default function Home() {
     const decisionHistory = data.activeDecisionId
       ? data.decisionHistory.map((item) => item.id === id ? entry : item)
       : [entry, ...data.decisionHistory];
-    update({ aiChoice: choice, action, ...applyCompound(action), activeDecisionId: id, decisionHistory });
+    update({ aiChoice: choice, action, ...applyCompound(action), activeDecisionId: id, decisionHistory, decisionAdopted: choice === "follow-ai" });
     setStep(4);
   }
 
@@ -290,17 +299,45 @@ export default function Home() {
   }
 
   function saveReview(completionStatus: "completed" | "partial" | "failed") {
-    if (!canSaveReview) return;
-    const review = { date: new Date().toISOString(), action: data.action, biggestWaste: data.biggestWaste, bestAsset: data.bestAsset, tomorrowFocus: data.tomorrowFocus, multiplier: data.multiplier, predictionResult: data.predictionResult!, wrongAssumption: data.wrongAssumption, nextTimeChange: data.nextTimeChange };
+    if (!canSaveReview || data.decisionRating === null || data.decisionAdopted === null) return;
+    const result = outcomeFromCompletion(completionStatus);
+    const predictionResult = data.predictionResult ?? (result === "success" ? "happened" : result === "partial-success" ? "partial" : "did-not-happen");
+    const lesson = generateDecisionLesson({
+      action: data.action,
+      result,
+      adopted: data.decisionAdopted,
+      rating: data.decisionRating,
+      prediction: judgment?.todayDeliverable,
+      wrongAssumption: data.wrongAssumption,
+      nextTimeChange: data.nextTimeChange,
+      biggestWaste: data.biggestWaste,
+      risk: judgment?.biggestRisk,
+    });
+    const quality = { rating: data.decisionRating, adopted: data.decisionAdopted, result, lesson };
+    const review = { date: new Date().toISOString(), action: data.action, biggestWaste: data.biggestWaste, bestAsset: data.bestAsset, tomorrowFocus: data.tomorrowFocus, multiplier: data.multiplier, predictionResult, wrongAssumption: data.wrongAssumption, nextTimeChange: data.nextTimeChange, rating: data.decisionRating, adopted: data.decisionAdopted, result, lesson };
     const incomplete = completionStatus === "completed" ? null : explainIncompleteDecision(completionStatus, data.action, data.biggestWaste, judgment?.biggestRisk ?? "完成标准未被验证");
     const decisionHistory = data.decisionHistory.map((entry) => entry.id === data.activeDecisionId
-      ? { ...entry, completionStatus, biggestWaste: data.biggestWaste, aiExplanation: incomplete?.explanation, tomorrowRecommendation: incomplete?.tomorrowRecommendation, ledger: { ...entry.ledger, outcome: data.predictionResult!, wrongAssumption: data.wrongAssumption, nextTimeChange: data.nextTimeChange, lesson: `错误假设：${data.wrongAssumption}；下次改变：${data.nextTimeChange}` } }
+      ? { ...entry, completionStatus, biggestWaste: data.biggestWaste, quality, aiExplanation: incomplete?.explanation, tomorrowRecommendation: incomplete?.tomorrowRecommendation, ledger: { ...entry.ledger, outcome: predictionResult, wrongAssumption: data.wrongAssumption, nextTimeChange: data.nextTimeChange, lesson: formatLessonSummary(lesson) } }
       : entry);
-    update({ reviews: [review, ...data.reviews], decisionHistory, completionResult: completionStatus, completed: true });
+    update({ reviews: [review, ...data.reviews], decisionHistory, completionResult: completionStatus, completed: true, predictionResult });
   }
 
   const canContinue = step === 1 ? data.goal.trim().length > 8 : step === 2 ? data.action.trim().length > 5 : true;
-  const canSaveReview = Boolean(data.biggestWaste.trim() && data.bestAsset.trim() && data.tomorrowFocus.trim() && data.predictionResult && data.wrongAssumption.trim() && data.nextTimeChange.trim());
+  const canSaveReview = Boolean(data.biggestWaste.trim() && data.bestAsset.trim() && data.tomorrowFocus.trim() && data.predictionResult && data.wrongAssumption.trim() && data.nextTimeChange.trim() && data.decisionRating && data.decisionAdopted !== null);
+  const draftResult = data.predictionResult === "happened" ? "success" as const : data.predictionResult === "partial" ? "partial-success" as const : data.predictionResult === "did-not-happen" ? "failed" as const : null;
+  const draftLesson = data.decisionRating && data.decisionAdopted !== null && draftResult && data.wrongAssumption.trim() && data.nextTimeChange.trim()
+    ? generateDecisionLesson({
+      action: data.action,
+      result: draftResult,
+      adopted: data.decisionAdopted,
+      rating: data.decisionRating,
+      prediction: judgment?.todayDeliverable,
+      wrongAssumption: data.wrongAssumption,
+      nextTimeChange: data.nextTimeChange,
+      biggestWaste: data.biggestWaste,
+      risk: judgment?.biggestRisk,
+    })
+    : null;
   const openToday = () => {
     setView("today");
     setSelectedAsset(null);
@@ -448,21 +485,25 @@ export default function Home() {
               {data.completed ? <div className="completion">
                 <div className="completion-mark">{data.completionResult === "completed" ? "✓" : data.completionResult === "partial" ? "◐" : "×"}</div><h3>Daily review saved</h3><p>结果：{completionLabel(data.completionResult)}。你留下了 {data.selectedAssets.length} 项可复用资产。</p>
                 <div className="summary-row"><span>行动</span><strong>{data.action}</strong></div><div className="summary-row"><span>乘数</span><strong>{data.multiplier}</strong></div>
+                {data.activeDecisionId && (() => { const entry = data.decisionHistory.find((item) => item.id === data.activeDecisionId); return entry?.quality ? <div className="incomplete-guidance lesson-summary"><strong>Decision Feedback</strong><p>评分 {entry.quality.rating}/5 · 采纳 {entry.quality.adopted ? "Yes" : "No"} · {outcomeLabel(entry.quality.result)}</p><strong>Lesson</strong><p>{entry.quality.lesson.why}</p><strong>正确假设</strong><p>{entry.quality.lesson.correctAssumption}</p><strong>错误假设</strong><p>{entry.quality.lesson.wrongAssumption}</p><strong>下次调整</strong><p>{entry.quality.lesson.nextAdjustment}</p></div> : null; })()}
                 {data.completionResult !== "completed" && data.activeDecisionId && (() => { const entry = data.decisionHistory.find((item) => item.id === data.activeDecisionId); return entry ? <div className="incomplete-guidance"><strong>AI explanation</strong><p>{entry.aiExplanation}</p><strong>Tomorrow&apos;s recommendation</strong><p>{entry.tomorrowRecommendation}</p></div> : null; })()}
-                <button className="secondary" onClick={() => { update({ action: "", multiplier: "", compound: emptyCompound, completed: false, assets: [], selectedAssets: [], biggestWaste: "", bestAsset: "", tomorrowFocus: "", predictionResult: null, wrongAssumption: "", nextTimeChange: "", aiChoice: null, activeDecisionId: null, assetDrafts: [], completionResult: null }); setStep(2); }}>开始新的一天 →</button>
+                <button className="secondary" onClick={() => { update({ action: "", multiplier: "", compound: emptyCompound, completed: false, assets: [], selectedAssets: [], biggestWaste: "", bestAsset: "", tomorrowFocus: "", predictionResult: null, wrongAssumption: "", nextTimeChange: "", decisionRating: null, decisionAdopted: null, aiChoice: null, activeDecisionId: null, assetDrafts: [], completionResult: null }); setStep(2); }}>开始新的一天 →</button>
               </div> : <div className="review-form">
                 <label><span>Biggest Waste</span><strong>今天最大的浪费是什么？</strong><textarea value={data.biggestWaste} onChange={(e) => update({ biggestWaste: e.target.value })} placeholder="以后可以删除、委派或自动化什么？" /></label>
                 <label><span>Best Asset Created</span><strong>今天留下的最佳资产是什么？</strong><textarea value={data.bestAsset} onChange={(e) => update({ bestAsset: e.target.value })} placeholder="SOP、Prompt、Template 或 Knowledge Base…" /></label>
                 <label><span>Tomorrow&apos;s One Focus</span><strong>明天唯一的重点是什么？</strong><textarea value={data.tomorrowFocus} onChange={(e) => update({ tomorrowFocus: e.target.value })} placeholder="只写一个最值得推进的结果…" /></label>
+                <fieldset className="prediction-review"><legend>Decision Feedback · 用户评分</legend><div className="star-picker rating-picker">{([1, 2, 3, 4, 5] as const).map((value) => <button type="button" key={value} className={data.decisionRating !== null && data.decisionRating >= value ? "active" : ""} onClick={() => update({ decisionRating: value })} aria-label={`评分 ${value}`}>{value}</button>)}</div></fieldset>
+                <fieldset className="prediction-review"><legend>是否采纳 AI 建议</legend><div>{([{ value: true, label: "Yes" }, { value: false, label: "No" }] as const).map((option) => <button type="button" key={option.label} className={data.decisionAdopted === option.value ? "active" : ""} onClick={() => update({ decisionAdopted: option.value })}>{option.label}</button>)}</div></fieldset>
                 <fieldset className="prediction-review"><legend>Did the prediction happen?</legend><div>{(["happened", "partial", "did-not-happen"] as const).map((result) => <button type="button" key={result} className={data.predictionResult === result ? "active" : ""} onClick={() => update({ predictionResult: result })}>{predictionResultLabel(result)}</button>)}</div></fieldset>
                 <label><span>Wrong Assumption</span><strong>哪个假设错了？</strong><textarea value={data.wrongAssumption} onChange={(e) => update({ wrongAssumption: e.target.value })} placeholder="写下事实推翻了哪个假设…" /></label>
                 <label><span>Next Time</span><strong>下次应该改变什么？</strong><textarea value={data.nextTimeChange} onChange={(e) => update({ nextTimeChange: e.target.value })} placeholder="记录一个具体的决策规则或行动变化…" /></label>
+                {draftLesson && <div className="lesson-preview"><small>AI LESSON · 自动生成</small><p><strong>为什么</strong>{draftLesson.why}</p><p><strong>正确假设</strong>{draftLesson.correctAssumption}</p><p><strong>错误假设</strong>{draftLesson.wrongAssumption}</p><p><strong>下次调整</strong>{draftLesson.nextAdjustment}</p></div>}
               </div>}
             </>}
 
             {!data.completed && <div className="actions">
               {step > 1 && <button className="back" onClick={() => setStep(step - 1)}>← 返回</button>}
-              {step === 3 ? <><button className="secondary" disabled={!judgment} onClick={() => chooseAiPath("keep-plan")}>Keep My Plan</button><button className="primary" disabled={!judgment} onClick={() => chooseAiPath("follow-ai")}>Follow AI<span>→</span></button></> : step === 4 ? <><button className="secondary" onClick={generateCompoundAssets}>生成资产</button><button className="primary" disabled={!data.compound.asset.trim()} onClick={next}>继续<span>→</span></button></> : step === 6 ? <div className="completion-actions"><button disabled={!canSaveReview} onClick={() => saveReview("failed")}>Failed</button><button disabled={!canSaveReview} onClick={() => saveReview("partial")}>Partial</button><button className="primary" disabled={!canSaveReview} onClick={() => saveReview("completed")}>Completed<span>→</span></button></div> : <button className="primary" disabled={!canContinue || (step === 5 && data.assetDrafts.every((draft) => draft.status !== "saved"))} onClick={next}>{step === 5 ? "保存资产并继续" : "继续"}<span>→</span></button>}
+              {step === 3 ? <><button className="secondary" disabled={!judgment} onClick={() => chooseAiPath("keep-plan")}>Keep My Plan</button><button className="primary" disabled={!judgment} onClick={() => chooseAiPath("follow-ai")}>Follow AI<span>→</span></button></> : step === 4 ? <><button className="secondary" onClick={generateCompoundAssets}>生成资产</button><button className="primary" disabled={!data.compound.asset.trim()} onClick={next}>继续<span>→</span></button></> : step === 6 ? <div className="completion-actions"><button disabled={!canSaveReview} onClick={() => saveReview("failed")}>Failed</button><button disabled={!canSaveReview} onClick={() => saveReview("partial")}>Partial Success</button><button className="primary" disabled={!canSaveReview} onClick={() => saveReview("completed")}>Success<span>→</span></button></div> : <button className="primary" disabled={!canContinue || (step === 5 && data.assetDrafts.every((draft) => draft.status !== "saved"))} onClick={next}>{step === 5 ? "保存资产并继续" : "继续"}<span>→</span></button>}
             </div>}
           </div>
           </>}
@@ -478,8 +519,8 @@ function formatReviewDate(date: string) {
 }
 
 function completionLabel(status: State["completionResult"]) {
-  if (status === "completed") return "Completed";
-  if (status === "partial") return "Partial";
+  if (status === "completed") return "Success";
+  if (status === "partial") return "Partial Success";
   if (status === "failed") return "Failed";
   return "Pending";
 }
